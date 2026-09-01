@@ -1,0 +1,11 @@
+{
+  "name": "NextUnit DocuScan",
+  "description": "Complete Document Scanner, OCR, Scan to Excel/CSV, Voice Notes & Google Drive Management System",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
