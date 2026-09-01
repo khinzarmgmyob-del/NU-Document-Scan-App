@@ -65,11 +65,12 @@ class _ScannerTabState extends State<ScannerTab> {
     });
 
     try {
-      setState(() => _progress = 0.6);
+      setState(() => _progress = 0.5);
       final text = await OcrService.processImage(imageFile);
-      setState(() => _progress = 0.9);
+      setState(() => _progress = 0.8);
 
-      final table = OcrService.parseTextToTable(text);
+      // Extract table using 2D Spatial Bounding Box Clustering Algorithm
+      final table = await OcrService.extractSpatialTable(imageFile);
 
       setState(() {
         _extractedText = text;
