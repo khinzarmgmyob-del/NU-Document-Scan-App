@@ -1,0 +1,56 @@
+name: Flutter Build & Release APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APK & AppBundle
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Verify Flutter & Environment
+        run: flutter doctor -v
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Android APK (Release)
+        run: flutter build apk --release --split-per-abi
+
+      - name: Build Android Universal APK
+        run: flutter build apk --release
+
+      - name: Build Android AppBundle (.aab)
+        run: flutter build appbundle --release
+
+      - name: Upload Release APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NextUnit-DocuScan-APK
+          path: build/app/outputs/flutter-apk/*.apk
+
+      - name: Upload Release AppBundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NextUnit-DocuScan-AAB
+          path: build/app/outputs/bundle/release/*.aab

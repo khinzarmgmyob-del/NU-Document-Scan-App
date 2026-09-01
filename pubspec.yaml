@@ -1,0 +1,39 @@
+name: nextunit_docuscan
+description: "NextUnit DocuScan - Flutter Document Scanner, OCR to Excel, PDF Generator, and Voice Note System"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  google_mlkit_text_recognition: ^0.13.0
+  camera: ^0.10.6
+  image_picker: ^1.1.2
+  path_provider: ^2.1.4
+  path: ^1.9.0
+  pdf: ^3.11.1
+  printing: ^5.13.2
+  excel: ^4.0.3
+  csv: ^6.0.0
+  record: ^5.1.2
+  audioplayers: ^6.0.0
+  share_plus: ^10.0.2
+  open_file: ^3.3.2
+  intl: ^0.19.0
+  flutter_svg: ^2.0.10+1
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
