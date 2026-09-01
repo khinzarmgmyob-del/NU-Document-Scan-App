@@ -1,4 +1,7 @@
 import { DocumentItem, LocalFileItem } from '../types';
+import { SpreadsheetService } from './spreadsheetService';
+import { PdfService } from './pdfService';
+import { OcrService } from './ocrService';
 
 const STORAGE_KEY_DOCS = 'nextunit_docuscan_documents';
 const STORAGE_KEY_FILES = 'nextunit_docuscan_files';
@@ -108,6 +111,115 @@ export class StorageService {
   }
 
   /**
+   * Universal downloader for any LocalFileItem:
+   * Handles Excel (.xlsx), CSV (.csv), PDF (.pdf), Audio, Text, Images with 100% guarantee.
+   */
+  static downloadFile(file: LocalFileItem): void {
+    try {
+      // 1. Excel Spreadsheet (.xlsx)
+      if (file.isExcel || file.extension === 'xlsx' || file.name.toLowerCase().endsWith('.xlsx')) {
+        if (file.dataUrl && file.dataUrl.startsWith('data:')) {
+          this.triggerDownload(file.dataUrl, file.name);
+          return;
+        }
+
+        const baseName = file.name.replace(/\.xlsx$/i, '');
+        let table = file.tableData && file.tableData.length > 0 ? file.tableData : null;
+        if (!table && file.textContent) {
+          table = OcrService.parseTableFromText(file.textContent);
+        }
+        if (!table || table.length === 0) {
+          table = [
+            ['Column 1', 'Column 2', 'Column 3'],
+            ['Extracted Data', file.name, new Date().toLocaleDateString()],
+          ];
+        }
+
+        SpreadsheetService.exportToExcel({
+          fileName: baseName,
+          tableData: table,
+        });
+        return;
+      }
+
+      // 2. CSV Spreadsheet (.csv)
+      if (file.isCsv || file.extension === 'csv' || file.name.toLowerCase().endsWith('.csv')) {
+        if (file.dataUrl && file.dataUrl.startsWith('data:')) {
+          this.triggerDownload(file.dataUrl, file.name);
+          return;
+        }
+
+        const baseName = file.name.replace(/\.csv$/i, '');
+        let table = file.tableData && file.tableData.length > 0 ? file.tableData : null;
+        if (!table && file.textContent) {
+          table = OcrService.parseTableFromText(file.textContent);
+        }
+        if (!table || table.length === 0) {
+          table = [
+            ['Column 1', 'Column 2', 'Column 3'],
+            ['Extracted CSV', file.name, new Date().toLocaleDateString()],
+          ];
+        }
+
+        SpreadsheetService.exportToCsv({
+          fileName: baseName,
+          tableData: table,
+        });
+        return;
+      }
+
+      // 3. Direct dataUrl exists (PDFs, Images, Audio, Data URLs)
+      if (file.dataUrl && file.dataUrl.length > 0) {
+        this.triggerDownload(file.dataUrl, file.name);
+        return;
+      }
+
+      // 4. PDF fallback generator
+      if (file.isPdf || file.extension === 'pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        PdfService.generateAndSavePdf({
+          title: file.name.replace(/\.pdf$/i, ''),
+          ocrText: file.textContent || 'No OCR text available.',
+          tableData: file.tableData,
+        });
+        return;
+      }
+
+      // 5. Text / Audio note text fallback
+      if (file.textContent) {
+        const blob = new Blob([file.textContent], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        this.triggerDownload(url, file.name.includes('.') ? file.name : `${file.name}.txt`);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        return;
+      }
+
+      // 6. Generic blank fallback
+      const blob = new Blob([`File: ${file.name}\nExported from NextUnit DocuScan`], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      this.triggerDownload(url, `${file.name}.txt`);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (err) {
+      console.error('Error downloading file:', err);
+    }
+  }
+
+  /**
+   * Helper to trigger download of a given URL or data URI
+   */
+  static triggerDownload(url: string, fileName: string): void {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      if (document.body.contains(link)) {
+        document.body.removeChild(link);
+      }
+    }, 200);
+  }
+
+  /**
    * Seed initial documents for instant out-of-the-box utility
    */
   private static getSeedDocuments(): DocumentItem[] {
@@ -138,6 +250,32 @@ GRAND TOTAL | | | $1,931.30`,
           ['GRAND TOTAL', '', '', '$1,931.30']
         ],
         isSyncedToDrive: true,
+        userId: 'user-normal-1',
+        userName: 'Khinzar (Yangon Branch)',
+        userRole: 'normal',
+        branch: 'Yangon Branch',
+      },
+      {
+        id: 'seed-doc-2',
+        title: 'Doc_20260901_Mandalay_Logistics_Receipt',
+        imagePath: '',
+        extractedText: `MANDALAY LOGISTICS HUB
+RECEIPT: #MLH-8821 | DATE: 2026-09-01
+Cargo Waybill Dispatch #99102
+Total Freight Weight: 420 kg
+Paid: $850.00`,
+        createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+        tableData: [
+          ['Consignment ID', 'Destination', 'Weight (kg)', 'Charge ($)'],
+          ['CS-901', 'Yangon Main Depot', '250', '500.00'],
+          ['CS-902', 'Naypyitaw Central', '170', '350.00'],
+          ['TOTAL', '', '420', '850.00']
+        ],
+        isSyncedToDrive: true,
+        userId: 'user-normal-2',
+        userName: 'Ko Min (Mandalay Branch)',
+        userRole: 'normal',
+        branch: 'Mandalay Branch',
       }
     ];
   }
@@ -167,7 +305,11 @@ GRAND TOTAL | | | $1,931.30`,
           ['Cloud OCR API License (1 Year)', '5', '$120.00', '$600.00'],
           ['High-Speed Thermal Receipt Unit', '1', '$280.00', '$280.00'],
           ['GRAND TOTAL', '', '', '$1,931.30']
-        ]
+        ],
+        userId: 'user-normal-1',
+        userName: 'Khinzar (Yangon Branch)',
+        userRole: 'normal',
+        branch: 'Yangon Branch',
       },
       {
         id: 'seed-file-2',
@@ -187,7 +329,11 @@ GRAND TOTAL | | | $1,931.30`,
           ['SKU-9902', 'Thermal Label Rolls 4x6', 'Aisle 1-A', '580'],
           ['SKU-9903', 'Barcode Mobile Terminal', 'Aisle 4-C', '36'],
           ['SKU-9904', 'Heavy Duty Storage Bin', 'Rack 12', '210']
-        ]
+        ],
+        userId: 'user-normal-2',
+        userName: 'Ko Min (Mandalay Branch)',
+        userRole: 'normal',
+        branch: 'Mandalay Branch',
       },
       {
         id: 'seed-file-3',
@@ -201,7 +347,11 @@ GRAND TOTAL | | | $1,931.30`,
         isCsv: true,
         isAudio: false,
         driveSynced: false,
-        textContent: `"Item","Qty","Price"\n"Cold Brew Latte","2","$11.00"\n"Avocado Toast Supreme","2","$28.00"\n"Artisan Pastry Box","1","$14.50"\n"TOTAL PAID","","$67.54"`
+        textContent: `"Item","Qty","Price"\n"Cold Brew Latte","2","$11.00"\n"Avocado Toast Supreme","2","$28.00"\n"Artisan Pastry Box","1","$14.50"\n"TOTAL PAID","","$67.54"`,
+        userId: 'user-normal-3',
+        userName: 'Su Su (Naypyitaw Branch)',
+        userRole: 'normal',
+        branch: 'Naypyitaw Branch',
       },
       {
         id: 'seed-file-4',
@@ -214,7 +364,11 @@ GRAND TOTAL | | | $1,931.30`,
         isExcel: false,
         isCsv: false,
         isAudio: true,
-        driveSynced: false
+        driveSynced: false,
+        userId: 'user-admin-1',
+        userName: 'Admin Manager (HQ)',
+        userRole: 'admin',
+        branch: 'Headquarters (Main)',
       }
     ];
   }

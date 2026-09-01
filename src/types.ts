@@ -1,3 +1,16 @@
+export type UserRole = 'admin' | 'normal';
+
+export interface AppUser {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  branch: string;
+  status: 'active' | 'inactive';
+  createdAt: string;
+  avatarColor?: string;
+}
+
 export interface DocumentItem {
   id: string;
   title: string;
@@ -10,6 +23,10 @@ export interface DocumentItem {
   voiceNotePath?: string;
   voiceDurationSec?: number;
   isSyncedToDrive?: boolean;
+  userId?: string;
+  userName?: string;
+  userRole?: UserRole;
+  branch?: string;
 }
 
 export interface LocalFileItem {
@@ -27,6 +44,10 @@ export interface LocalFileItem {
   textContent?: string;
   tableData?: string[][];
   driveSynced?: boolean;
+  userId?: string;
+  userName?: string;
+  userRole?: UserRole;
+  branch?: string;
 }
 
 export interface DriveAccount {
@@ -37,5 +58,6 @@ export interface DriveAccount {
   syncedFilesCount: number;
 }
 
-export type ActiveTab = 'scan' | 'excel' | 'voice' | 'storage';
+export type ActiveTab = 'scan' | 'excel' | 'voice' | 'storage' | 'bsetup';
 export type FilterCategory = 'all' | 'pdf' | 'excel' | 'audio';
+

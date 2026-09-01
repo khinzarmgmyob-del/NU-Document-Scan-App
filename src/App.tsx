@@ -4,17 +4,19 @@ import {
   Table,
   Mic,
   Folder,
+  SlidersHorizontal,
   CheckCircle2,
   AlertCircle,
   X
 } from 'lucide-react';
-import { ActiveTab, DocumentItem, LocalFileItem, FilterCategory, DriveAccount } from './types';
+import { ActiveTab, DocumentItem, LocalFileItem, FilterCategory, DriveAccount, AppUser } from './types';
 import { Navbar } from './components/Navbar';
 import { WaveBackground } from './components/WaveBackground';
 import { ScannerTab } from './components/ScannerTab';
 import { ExcelTab } from './components/ExcelTab';
 import { VoiceTab } from './components/VoiceTab';
 import { StorageTab } from './components/StorageTab';
+import { BSetupTab } from './components/BSetupTab';
 import { CameraModal } from './components/CameraModal';
 import { DocumentReaderModal } from './components/DocumentReaderModal';
 import { OcrService, SAMPLE_DOCUMENTS } from './services/ocrService';
@@ -23,6 +25,7 @@ import { PdfService } from './services/pdfService';
 import { StorageService } from './services/storageService';
 import { VoiceService } from './services/voiceService';
 import { DriveService } from './services/driveService';
+import { UserService } from './services/userService';
 
 export function App() {
   // Theme State
@@ -45,14 +48,29 @@ export function App() {
     }
   }, [isDark]);
 
+  // User & RBAC State
+  const [users, setUsers] = useState<AppUser[]>(() => UserService.getUsers());
+  const [currentUser, setCurrentUser] = useState<AppUser>(() => UserService.getCurrentUser());
+
   // Navigation
   const [activeTab, setActiveTab] = useState<ActiveTab>('scan');
+
+  // Guard: Normal User cannot access bsetup tab
+  useEffect(() => {
+    if (currentUser.role !== 'admin' && activeTab === 'bsetup') {
+      setActiveTab('storage');
+    }
+  }, [currentUser, activeTab]);
 
   // Scanner & OCR State
   const [scannedImage, setScannedImage] = useState<string | null>(null);
   const [extractedText, setExtractedText] = useState<string>('');
   const [currentDocTitle, setCurrentDocTitle] = useState<string>('Scanned_Doc');
+  const [currentDocDate, setCurrentDocDate] = useState<string>(() => new Date().toLocaleString());
   const [isProcessingOcr, setIsProcessingOcr] = useState<boolean>(false);
+  const [selectedEngine, setSelectedEngine] = useState<'gemini' | 'spatial'>('gemini');
+  const [lastEngineUsed, setLastEngineUsed] = useState<string>('');
+  const [engineWarning, setEngineWarning] = useState<string | null>(null);
   const [ocrProgress, setOcrProgress] = useState<{ progress: number; status: string }>({
     progress: 0,
     status: '',
@@ -97,6 +115,7 @@ export function App() {
     if (loadedDocs.length > 0) {
       const initialDoc = loadedDocs[0];
       setCurrentDocTitle(initialDoc.title);
+      setCurrentDocDate(new Date(initialDoc.createdAt).toLocaleString());
       setExtractedText(initialDoc.extractedText);
       setTableRows(initialDoc.tableData);
     }
@@ -107,11 +126,49 @@ export function App() {
     setTimeout(() => setToast(null), 3500);
   };
 
+  // --- User Management Actions ---
+  const handleSwitchUser = (userId: string) => {
+    const switched = UserService.setCurrentUser(userId);
+    if (switched) {
+      setCurrentUser(switched);
+      showToast(`Switched active user: ${switched.name} (${switched.role === 'admin' ? 'Admin User' : 'Normal User'})`);
+      if (switched.role !== 'admin' && activeTab === 'bsetup') {
+        setActiveTab('storage');
+      }
+    }
+  };
+
+  const handleAddUser = (user: Omit<AppUser, 'id' | 'createdAt'>) => {
+    const newUser = UserService.addUser(user);
+    const updatedUsers = UserService.getUsers();
+    setUsers(updatedUsers);
+    showToast(`User created: ${newUser.name} (${newUser.role === 'admin' ? 'Admin' : 'Normal User'})`);
+  };
+
+  const handleUpdateUser = (id: string, updates: Partial<Omit<AppUser, 'id' | 'createdAt'>>) => {
+    const updatedUsers = UserService.updateUser(id, updates);
+    setUsers(updatedUsers);
+    if (currentUser.id === id) {
+      const updatedCurrent = updatedUsers.find(u => u.id === id);
+      if (updatedCurrent) setCurrentUser(updatedCurrent);
+    }
+    showToast('User permissions updated successfully');
+  };
+
+  const handleDeleteUser = (id: string) => {
+    const updatedUsers = UserService.deleteUser(id);
+    setUsers(updatedUsers);
+    showToast('User removed');
+  };
+
   // --- OCR & Image Processing ---
   const processImageForOcr = async (imageSource: string | File) => {
-    const timeStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const now = new Date();
+    const timeStamp = now.toISOString().replace(/[-:T]/g, '').slice(0, 14);
     const title = `Doc_${timeStamp}`;
+    const scanDateFormatted = now.toLocaleString();
     setCurrentDocTitle(title);
+    setCurrentDocDate(scanDateFormatted);
     setIsProcessingOcr(true);
     setOcrProgress({ progress: 0.1, status: 'Initializing OCR Engine...' });
 
@@ -130,20 +187,30 @@ export function App() {
 
       setScannedImage(imageSrc);
 
-      // Check if image is one of our sample documents for instantaneous matching
-      const matchingSample = SAMPLE_DOCUMENTS.find(s => s.imageUrl === imageSrc);
       let text = '';
       let table: string[][] = [];
 
-      if (matchingSample) {
-        text = matchingSample.ocrText;
-        table = matchingSample.tableData;
+      if (selectedEngine === 'gemini') {
+        const geminiResult = await OcrService.recognizeImageWithGeminiVision(imageSource, (progress, status) => {
+          setOcrProgress({ progress, status });
+        });
+        text = geminiResult.text;
+        table = geminiResult.table;
+        if (geminiResult.engine === 'gemini') {
+          setLastEngineUsed('✨ AI Smart Vision (Gemini 3.7 Flash)');
+          setEngineWarning(null);
+        } else {
+          setLastEngineUsed('⚡ Fast 2D Spatial Engine (Fallback)');
+          setEngineWarning(geminiResult.error || 'Gemini Vision could not connect. Using local Spatial OCR.');
+        }
       } else {
         const ocrResult = await OcrService.recognizeImageWithSpatialClustering(imageSource, (progress, status) => {
           setOcrProgress({ progress, status });
         });
         text = ocrResult.text;
         table = ocrResult.table;
+        setLastEngineUsed('⚡ Fast 2D Spatial Clustering Engine');
+        setEngineWarning(null);
       }
 
       setExtractedText(text || 'No text detected in this document.');
@@ -159,6 +226,10 @@ export function App() {
           createdAt: new Date().toISOString(),
           tableData: table,
           isSyncedToDrive: driveAccount.isSignedIn,
+          userId: currentUser.id,
+          userName: currentUser.name,
+          userRole: currentUser.role,
+          branch: currentUser.branch,
         };
 
         const updatedDocs = StorageService.addDocument(newDoc);
@@ -203,6 +274,10 @@ export function App() {
         textContent: extractedText,
         tableData: tableRows,
         driveSynced: driveAccount.isSignedIn,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        branch: currentUser.branch,
       };
 
       const updatedFiles = StorageService.addLocalFile(newFileItem);
@@ -223,7 +298,7 @@ export function App() {
 
     try {
       const timeStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-      const fileName = `DocuScan_Export_${timeStamp}`;
+      const fileName = `${currentDocTitle || `DocuScan_Export_${timeStamp}`}`;
       const { blob, fileName: fullFileName } = SpreadsheetService.exportToExcel({
         fileName,
         tableData: tableRows,
@@ -242,6 +317,10 @@ export function App() {
         isAudio: false,
         tableData: tableRows,
         driveSynced: driveAccount.isSignedIn,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        branch: currentUser.branch,
       };
 
       const updatedFiles = StorageService.addLocalFile(newFileItem);
@@ -262,7 +341,7 @@ export function App() {
 
     try {
       const timeStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-      const fileName = `DocuScan_Export_${timeStamp}`;
+      const fileName = `${currentDocTitle || `DocuScan_Export_${timeStamp}`}`;
       const { blob, fileName: fullFileName, csvContent } = SpreadsheetService.exportToCsv({
         fileName,
         tableData: tableRows,
@@ -282,6 +361,10 @@ export function App() {
         textContent: csvContent,
         tableData: tableRows,
         driveSynced: driveAccount.isSignedIn,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        branch: currentUser.branch,
       };
 
       const updatedFiles = StorageService.addLocalFile(newFileItem);
@@ -352,6 +435,10 @@ export function App() {
       textContent,
       dataUrl,
       driveSynced: false,
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      branch: currentUser.branch,
     };
 
     const updated = StorageService.addLocalFile(newFile);
@@ -374,7 +461,14 @@ export function App() {
   };
 
   const handleSaveVoiceNote = (file: LocalFileItem) => {
-    const updated = StorageService.addLocalFile(file);
+    const fileWithUser: LocalFileItem = {
+      ...file,
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      branch: currentUser.branch,
+    };
+    const updated = StorageService.addLocalFile(fileWithUser);
     setLocalFiles(updated);
     showToast(`Voice note saved: ${file.name}`);
   };
@@ -389,6 +483,8 @@ export function App() {
     });
   };
 
+  const isAdmin = currentUser.role === 'admin';
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-dark-bg text-slate-900 dark:text-slate-100 flex flex-col selection:bg-emerald-500/20 pb-20 relative overflow-x-hidden transition-colors duration-300">
       {/* Top 1/3 Wave Background Graphic */}
@@ -397,10 +493,14 @@ export function App() {
       {/* Top Navigation Bar */}
       <Navbar
         driveAccount={driveAccount}
+        currentUser={currentUser}
+        users={users}
         isDark={isDark}
         onToggleTheme={() => setIsDark(prev => !prev)}
         onToggleDrive={handleToggleDrive}
         onOpenStorage={() => setActiveTab('storage')}
+        onSwitchUser={handleSwitchUser}
+        onOpenSetup={() => setActiveTab('bsetup')}
       />
 
       {/* Main View Area with Tab Panels */}
@@ -411,6 +511,10 @@ export function App() {
             extractedText={extractedText}
             isProcessingOcr={isProcessingOcr}
             ocrProgress={ocrProgress}
+            selectedEngine={selectedEngine}
+            lastEngineUsed={lastEngineUsed}
+            engineWarning={engineWarning}
+            onEngineChange={setSelectedEngine}
             onScanCamera={() => setIsCameraOpen(true)}
             onImageSelected={processImageForOcr}
             onTextChange={setExtractedText}
@@ -420,6 +524,8 @@ export function App() {
               setScannedImage(null);
               setExtractedText('');
               setTableRows([]);
+              setLastEngineUsed('');
+              setEngineWarning(null);
             }}
           />
         )}
@@ -456,11 +562,25 @@ export function App() {
             onImportFile={handleImportFile}
           />
         )}
+
+        {activeTab === 'bsetup' && isAdmin && (
+          <BSetupTab
+            currentUser={currentUser}
+            users={users}
+            files={localFiles}
+            onAddUser={handleAddUser}
+            onUpdateUser={handleUpdateUser}
+            onDeleteUser={handleDeleteUser}
+            onSwitchUser={handleSwitchUser}
+            onOpenFile={handleOpenFile}
+            onDeleteFile={handleDeleteFile}
+          />
+        )}
       </main>
 
-      {/* Bottom Navigation Bar */}
+      {/* Bottom Navigation Bar (Dynamic 4 or 5 Columns based on Role) */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-dark-card/95 backdrop-blur-md border-t border-emerald-100 dark:border-dark-border shadow-lg transition-colors">
-        <div className="max-w-md mx-auto grid grid-cols-4 h-16">
+        <div className={`max-w-md mx-auto grid h-16 ${isAdmin ? 'grid-cols-5' : 'grid-cols-4'}`}>
           {/* Destination 1: Scan & OCR */}
           <button
             onClick={() => setActiveTab('scan')}
@@ -536,6 +656,27 @@ export function App() {
             </div>
             <span className="text-[11px] tracking-tight">Storage &amp; Drive</span>
           </button>
+
+          {/* Destination 5: B setup (Admin Only) */}
+          {isAdmin && (
+            <button
+              onClick={() => setActiveTab('bsetup')}
+              className={`flex flex-col items-center justify-center gap-1 transition-all ${
+                activeTab === 'bsetup'
+                  ? 'text-emerald-700 dark:text-emerald-300 font-bold'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-300'
+              }`}
+            >
+              <div
+                className={`p-1.5 rounded-full transition-all ${
+                  activeTab === 'bsetup' ? 'bg-emerald-100/90 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300' : ''
+                }`}
+              >
+                <SlidersHorizontal className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] tracking-tight">B setup</span>
+            </button>
+          )}
         </div>
       </nav>
 

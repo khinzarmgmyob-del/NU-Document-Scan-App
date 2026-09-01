@@ -11,7 +11,8 @@ import {
   CheckCircle2,
   Trash2,
   HardDrive,
-  Eye
+  Eye,
+  Download
 } from 'lucide-react';
 import { LocalFileItem, DriveAccount, FilterCategory } from '../types';
 import { StorageService } from '../services/storageService';
@@ -234,6 +235,14 @@ export const StorageTab: React.FC<StorageTabProps> = ({
                   title="Open & Read Document"
                 >
                   <Eye className="w-4 h-4" />
+                </button>
+
+                <button
+                  onClick={() => StorageService.downloadFile(file)}
+                  className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-lg hover:bg-emerald-50 dark:hover:bg-dark-elevated transition-colors"
+                  title={`Download ${file.name}`}
+                >
+                  <Download className="w-4 h-4" />
                 </button>
 
                 <button

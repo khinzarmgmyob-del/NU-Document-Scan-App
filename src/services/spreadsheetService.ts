@@ -3,8 +3,8 @@ import { OcrService } from './ocrService';
 
 export class SpreadsheetService {
   /**
-   * Exports table rows to an Excel (.xlsx) file with clean table borders,
-   * proper column widths, and header styling.
+   * Exports table rows to an Excel (.xlsx) file with clean table borders
+   * and proper column widths.
    */
   static exportToExcel({
     fileName,
@@ -28,10 +28,10 @@ export class SpreadsheetService {
     // Set column widths dynamically based on longest content in each column
     if (normalizedData.length > 0) {
       const colWidths = (normalizedData[0] || []).map((_, colIdx) => {
-        let maxLen = 12;
+        let maxLen = 10;
         for (const row of normalizedData) {
           const cell = row[colIdx] ? String(row[colIdx]) : '';
-          if (cell.length > maxLen) maxLen = Math.min(cell.length + 4, 60);
+          if (cell.length > maxLen) maxLen = Math.min(cell.length + 3, 50);
         }
         return { wch: maxLen };
       });

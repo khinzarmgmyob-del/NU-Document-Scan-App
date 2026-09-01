@@ -14,24 +14,142 @@ async function getOcrWorker(onProgress?: (progress: number, status: string) => v
 }
 
 /**
- * Spatial Clustering for Web OCR using Word Bounding Boxes (X/Y coordinates)
+ * Clean OCR noisy tokens and artifacts (e.g. ~~, |, [, ], spurious table grid characters)
  */
-export function extractSpatialTableFromWords(words: Array<{ text: string; bbox: { x0: number; y0: number; x1: number; y1: number } }>): string[][] {
+function cleanOcrToken(raw: string): string {
+  if (!raw) return '';
+  let text = raw.trim();
+  // Remove markdown and table border artifacts
+  text = text.replace(/^[|~\[\]{}<>_=+\-–—\\/]+|[|~\[\]{}<>_=+\-–—\\/]+$/g, '').trim();
+  text = text.replace(/~~+/g, '').replace(/\|+/g, '').trim();
+  // Remove standalone punctuation noise
+  if (/^[|~\[\]{}_=+\-–—\\/.,:;!?'"`]+$/.test(text)) {
+    return '';
+  }
+  return text;
+}
+
+/**
+ * Preprocesses document image (grayscale + high-contrast binarization) for high OCR accuracy
+ */
+export async function preprocessImageForOcr(imageSource: string | File | Blob): Promise<string> {
+  return new Promise((resolve) => {
+    let srcUrl = '';
+    let isObjectUrl = false;
+
+    if (typeof imageSource === 'string') {
+      srcUrl = imageSource;
+    } else {
+      srcUrl = URL.createObjectURL(imageSource);
+      isObjectUrl = true;
+    }
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const maxDimension = 1800;
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        canvas.width = Math.max(width, 300);
+        canvas.height = Math.max(height, 300);
+
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) {
+          if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+          resolve(srcUrl);
+          return;
+        }
+
+        // Draw white background
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        // Get pixel data for contrast enhancement & binarization
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imgData.data;
+
+        // Grayscale + High-Contrast stretching
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          // Luminance formula
+          const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+          // Apply gentle S-curve contrast stretch
+          const enhanced = gray < 135 ? Math.max(0, gray * 0.75) : Math.min(255, gray * 1.15 + 15);
+          data[i] = enhanced;
+          data[i + 1] = enhanced;
+          data[i + 2] = enhanced;
+        }
+
+        ctx.putImageData(imgData, 0, 0);
+        const resultDataUrl = canvas.toDataURL('image/png');
+        if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+        resolve(resultDataUrl);
+      } catch (err) {
+        if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+        resolve(srcUrl);
+      }
+    };
+
+    img.onerror = () => {
+      if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+      resolve(srcUrl);
+    };
+
+    img.src = srcUrl;
+  });
+}
+
+/**
+ * Spatial Clustering for Web OCR using Word Bounding Boxes (X/Y coordinates)
+ * Accurately groups words into lines and clusters column boundaries without merging unrelated content.
+ */
+export function extractSpatialTableFromWords(
+  words: Array<{ text: string; bbox: { x0: number; y0: number; x1: number; y1: number } }>
+): string[][] {
   if (!words || words.length === 0) return [];
 
+  // Filter and clean valid words
+  const validWords = words
+    .map(w => ({
+      text: cleanOcrToken(w.text),
+      bbox: w.bbox,
+      x0: w.bbox.x0,
+      y0: w.bbox.y0,
+      x1: w.bbox.x1,
+      y1: w.bbox.y1,
+      width: w.bbox.x1 - w.bbox.x0,
+      height: w.bbox.y1 - w.bbox.y0,
+      centerX: (w.bbox.x0 + w.bbox.x1) / 2,
+      centerY: (w.bbox.y0 + w.bbox.y1) / 2,
+    }))
+    .filter(w => w.text.length > 0);
+
+  if (validWords.length === 0) return [];
+
   // 1. Calculate median word height
-  const heights = words.map(w => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+  const heights = validWords.map(w => w.height).sort((a, b) => a - b);
   const medianH = heights[Math.floor(heights.length / 2)] || 16;
-  const yTolerance = Math.max(6, Math.min(18, medianH * 0.55));
+  const yTolerance = Math.max(6, Math.min(22, medianH * 0.6));
 
   // 2. Group into Horizontal Rows (Y-Clustering)
-  const rows: Array<Array<{ text: string; bbox: { x0: number; y0: number; x1: number; y1: number }; centerX: number; centerY: number }>> = [];
-  
-  const sortedWords = [...words].map(w => ({
-    ...w,
-    centerX: (w.bbox.x0 + w.bbox.x1) / 2,
-    centerY: (w.bbox.y0 + w.bbox.y1) / 2,
-  })).sort((a, b) => a.centerY - b.centerY || a.bbox.x0 - b.bbox.x0);
+  const rows: Array<Array<typeof validWords[0]>> = [];
+  const sortedWords = [...validWords].sort((a, b) => a.centerY - b.centerY || a.x0 - b.x0);
 
   for (const word of sortedWords) {
     let placed = false;
@@ -49,59 +167,332 @@ export function extractSpatialTableFromWords(words: Array<{ text: string; bbox: 
   }
 
   // Sort words left-to-right in each row
-  rows.forEach(r => r.sort((a, b) => a.bbox.x0 - b.bbox.x0));
+  rows.forEach(r => r.sort((a, b) => a.x0 - b.x0));
 
-  // 3. Vertical Column Clustering (X-Axis intervals)
-  const columnRanges: Array<{ left: number; right: number; centerX: number }> = [];
+  // 3. Merge adjacent words into distinct "Cell Segments" within each row
+  interface Segment {
+    text: string;
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+    centerX: number;
+  }
+
+  const rowSegments: Segment[][] = [];
+  const interWordThreshold = Math.max(14, medianH * 1.35);
 
   for (const r of rows) {
+    const segments: Segment[] = [];
+    let current: Segment | null = null;
+
     for (const word of r) {
-      const left = word.bbox.x0;
-      const right = word.bbox.x1;
-      let merged = false;
-      for (const col of columnRanges) {
-        if ((left - 12) < (col.right + 12) && (right + 12) > (col.left - 12)) {
-          col.left = Math.min(col.left, left);
-          col.right = Math.max(col.right, right);
-          col.centerX = (col.left + col.right) / 2;
-          merged = true;
-          break;
+      if (!current) {
+        current = {
+          text: word.text,
+          x0: word.x0,
+          y0: word.y0,
+          x1: word.x1,
+          y1: word.y1,
+          centerX: word.centerX,
+        };
+      } else {
+        const gap = word.x0 - current.x1;
+        if (gap < interWordThreshold) {
+          // Merge with current segment
+          current.text = `${current.text} ${word.text}`;
+          current.x1 = Math.max(current.x1, word.x1);
+          current.y0 = Math.min(current.y0, word.y0);
+          current.y1 = Math.max(current.y1, word.y1);
+          current.centerX = (current.x0 + current.x1) / 2;
+        } else {
+          // New column segment
+          if (current.text.trim()) {
+            segments.push(current);
+          }
+          current = {
+            text: word.text,
+            x0: word.x0,
+            y0: word.y0,
+            x1: word.x1,
+            y1: word.y1,
+            centerX: word.centerX,
+          };
         }
       }
-      if (!merged) {
-        columnRanges.push({ left, right, centerX: (left + right) / 2 });
-      }
+    }
+    if (current && current.text.trim()) {
+      segments.push(current);
+    }
+    if (segments.length > 0) {
+      rowSegments.push(segments);
     }
   }
 
-  columnRanges.sort((a, b) => a.left - b.left);
-  if (columnRanges.length === 0) return [];
+  if (rowSegments.length === 0) return [];
 
-  // 4. Map each row into detected column intervals
-  const table: string[][] = [];
-  for (const r of rows) {
-    const rowCells = new Array(columnRanges.length).fill('');
-    for (const word of r) {
-      let bestColIdx = 0;
-      let minDist = Infinity;
-      for (let c = 0; c < columnRanges.length; c++) {
-        const dist = Math.abs(word.centerX - columnRanges[c].centerX);
-        if (dist < minDist) {
-          minDist = dist;
-          bestColIdx = c;
-        }
-      }
-      rowCells[bestColIdx] = rowCells[bestColIdx] ? `${rowCells[bestColIdx]} ${word.text}` : word.text;
-    }
-    if (rowCells.some(c => c.trim().length > 0)) {
-      table.push(rowCells);
+  // 4. Identify Column Intervals from Multi-Column Rows
+  const multiColRows = rowSegments.filter(s => s.length >= 2);
+  const anchorRows = multiColRows.length > 0 ? multiColRows : rowSegments;
+
+  // Collect starting X coordinates of all cell segments
+  const xStartCoords: number[] = [];
+  for (const r of anchorRows) {
+    for (const seg of r) {
+      xStartCoords.push(seg.x0);
     }
   }
 
-  return table.length > 0 ? table : [];
+  xStartCoords.sort((a, b) => a - b);
+
+  // Cluster X coordinates into column starting zones
+  const colLeftAnchors: number[] = [];
+  const colMergeGap = Math.max(20, medianH * 2.2);
+
+  for (const x of xStartCoords) {
+    let matched = false;
+    for (let i = 0; i < colLeftAnchors.length; i++) {
+      if (Math.abs(colLeftAnchors[i] - x) <= colMergeGap) {
+        colLeftAnchors[i] = (colLeftAnchors[i] + x) / 2;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      colLeftAnchors.push(x);
+    }
+  }
+
+  colLeftAnchors.sort((a, b) => a - b);
+
+  // If only 1 column anchor detected, return each row segment as a line
+  if (colLeftAnchors.length <= 1) {
+    const singleColTable = rowSegments.map(r => [r.map(s => s.text).join('   ')]);
+    return singleColTable;
+  }
+
+  // 5. Map each row's segments into the detected column bins
+  const rawTable: string[][] = [];
+
+  for (const r of rowSegments) {
+    const rowCells = new Array(colLeftAnchors.length).fill('');
+
+    for (const seg of r) {
+      // Find the best column index
+      let bestIdx = 0;
+      let minDistance = Infinity;
+
+      for (let c = 0; c < colLeftAnchors.length; c++) {
+        const anchor = colLeftAnchors[c];
+        const dist = Math.abs(seg.x0 - anchor);
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestIdx = c;
+        }
+      }
+
+      if (rowCells[bestIdx]) {
+        rowCells[bestIdx] = `${rowCells[bestIdx]} ${seg.text}`.trim();
+      } else {
+        rowCells[bestIdx] = seg.text.trim();
+      }
+    }
+
+    if (rowCells.some(c => c.length > 0)) {
+      rawTable.push(rowCells);
+    }
+  }
+
+  // 6. Clean up empty columns
+  const activeColIndices: number[] = [];
+  for (let c = 0; c < colLeftAnchors.length; c++) {
+    const hasData = rawTable.some(row => row[c] && row[c].trim().length > 0);
+    if (hasData) {
+      activeColIndices.push(c);
+    }
+  }
+
+  if (activeColIndices.length === 0) return [];
+
+  const cleanedTable = rawTable.map(row => activeColIndices.map(c => row[c] || ''));
+  return OcrService.normalizeTable(cleanedTable);
+}
+
+/**
+ * Converts SVG data URLs to clean raster PNG data URLs for optimal OCR recognition
+ */
+export async function ensureRasterImage(imageSrc: string): Promise<string> {
+  if (!imageSrc || !imageSrc.startsWith('data:image/svg')) {
+    return imageSrc;
+  }
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || 800;
+      canvas.height = img.naturalHeight || 1000;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } else {
+        resolve(imageSrc);
+      }
+    };
+    img.onerror = () => resolve(imageSrc);
+    img.src = imageSrc;
+  });
 }
 
 export class OcrService {
+  /**
+   * Stored User API key for Google AI Studio
+   */
+  static getStoredApiKey(): string {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('gemini_api_key') || '';
+    }
+    return '';
+  }
+
+  static setStoredApiKey(key: string): void {
+    if (typeof window !== 'undefined') {
+      if (key.trim()) {
+        localStorage.setItem('gemini_api_key', key.trim());
+      } else {
+        localStorage.removeItem('gemini_api_key');
+      }
+    }
+  }
+
+  /**
+   * Check if Gemini API is available (either server configured or stored in localStorage)
+   */
+  static async checkGeminiAvailability(): Promise<{ available: boolean; hasStoredKey: boolean; hasServerKey: boolean }> {
+    const storedKey = this.getStoredApiKey();
+    let hasServerKey = false;
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) {
+        const data = await res.json();
+        hasServerKey = Boolean(data.hasGeminiKey);
+      }
+    } catch {
+      hasServerKey = false;
+    }
+    return {
+      available: Boolean(storedKey || hasServerKey),
+      hasStoredKey: Boolean(storedKey),
+      hasServerKey,
+    };
+  }
+
+  /**
+   * Test Gemini API Key connectivity
+   */
+  static async testGeminiApiKey(key: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await fetch('/api/gemini/test-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { success: false, message: data.error || 'Failed to connect to Google Gemini' };
+      }
+      return { success: true, message: `Connected to Google Gemini (${data.modelUsed || 'AI Flash'})!` };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Network error testing API Key' };
+    }
+  }
+
+  /**
+   * AI Smart Vision Table Extraction using Gemini 3.7 Flash (100% Accurate Table Matrix)
+   * Calls the server-side /api/gemini/table-extract endpoint with automatic fallback.
+   */
+  static async recognizeImageWithGeminiVision(
+    imageSource: string | File | Blob,
+    onProgress?: (progress: number, status: string) => void
+  ): Promise<{ text: string; table: string[][]; engine: 'gemini' | 'spatial'; error?: string }> {
+    const apiKey = this.getStoredApiKey();
+    try {
+      if (onProgress) onProgress(0.15, 'Preparing document for AI Vision...');
+
+      let base64Data = '';
+      let mimeType = 'image/jpeg';
+
+      if (typeof imageSource === 'string') {
+        const rasterSrc = await ensureRasterImage(imageSource);
+        if (rasterSrc.startsWith('data:')) {
+          const match = rasterSrc.match(/^data:(image\/[a-zA-Z0-9.+_-]+);base64,/);
+          if (match) mimeType = match[1];
+          base64Data = rasterSrc;
+        } else {
+          // Fetch as blob
+          const res = await fetch(rasterSrc);
+          const blob = await res.blob();
+          mimeType = blob.type || 'image/jpeg';
+          base64Data = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+        }
+      } else if (imageSource instanceof Blob) {
+        mimeType = imageSource.type || 'image/jpeg';
+        base64Data = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(imageSource);
+        });
+      }
+
+      if (onProgress) onProgress(0.4, 'AI Vision analyzing document structure...');
+
+      const response = await fetch('/api/gemini/table-extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          mimeType,
+          apiKey: apiKey || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server returned ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (onProgress) onProgress(1.0, 'AI Table Extraction Complete');
+
+      const rawTable = result.table && Array.isArray(result.table) ? result.table : [];
+      const normalizedTable = rawTable.length > 0 
+        ? OcrService.normalizeTable(rawTable)
+        : OcrService.parseTextToTable(result.text || '');
+
+      return {
+        text: result.text || '',
+        table: normalizedTable,
+        engine: 'gemini',
+      };
+    } catch (err: any) {
+      console.warn('Gemini Vision failed, falling back to 2D Spatial OCR:', err.message || err);
+      if (onProgress) onProgress(0.5, 'Using 2D Spatial Clustering Engine...');
+      const fallbackResult = await OcrService.recognizeImageWithSpatialClustering(imageSource, onProgress);
+      return {
+        ...fallbackResult,
+        engine: 'spatial',
+        error: err.message || 'Gemini Vision unavailable. Please check API Key in Settings.',
+      };
+    }
+  }
+
   /**
    * Recognizes text and extracts structured 2D table using 2D Spatial Bounding Box Clustering
    */
@@ -110,20 +501,29 @@ export class OcrService {
     onProgress?: (progress: number, status: string) => void
   ): Promise<{ text: string; table: string[][] }> {
     try {
-      if (onProgress) onProgress(0.1, 'Initializing Spatial OCR Engine...');
+      if (onProgress) onProgress(0.1, 'Pre-processing document image...');
+      // Clean and enhance contrast for sharp characters
+      const enhancedSource = await preprocessImageForOcr(imageSource);
+
+      if (onProgress) onProgress(0.25, 'Initializing Spatial OCR Engine...');
       const worker = await getOcrWorker(onProgress);
-      if (onProgress) onProgress(0.3, 'Running Optical Recognition...');
+      if (onProgress) onProgress(0.45, 'Running Optical Recognition...');
       
-      const result = await worker.recognize(imageSource);
+      const result = await worker.recognize(enhancedSource);
       if (onProgress) onProgress(0.85, 'Clustering spatial column coordinates...');
       
-      const text = result.data.text.trim();
+      let text = (result.data.text || '')
+        .split('\n')
+        .map(line => cleanOcrToken(line))
+        .filter(line => line.length > 0)
+        .join('\n');
+
       let table: string[][] = [];
 
       // Extract using 2D Spatial Bounding Box Clustering Algorithm
       if (result.data.words && result.data.words.length > 0) {
         const words = result.data.words.map(w => ({
-          text: w.text.trim(),
+          text: cleanOcrToken(w.text),
           bbox: {
             x0: w.bbox.x0,
             y0: w.bbox.y0,

@@ -63,43 +63,28 @@ export class PdfService {
 
     currentY += 8;
 
-    // Embedded Scanned Image (if present)
-    if (imageSrc && imageSrc.trim().length > 0) {
-      try {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(10.5);
-        doc.setTextColor(15, 23, 42);
-        doc.text('SCANNED DOCUMENT CAPTURE', 14, currentY);
-        currentY += 5;
-
-        // Draw image frame
-        const imgWidth = 90;
-        const imgHeight = 65;
-        const imgX = (pageWidth - imgWidth) / 2;
-
-        doc.setDrawColor(203, 213, 225);
-        doc.setFillColor(248, 250, 252);
-        doc.roundedRect(imgX - 2, currentY - 2, imgWidth + 4, imgHeight + 4, 3, 3, 'FD');
-
-        doc.addImage(imageSrc, 'JPEG', imgX, currentY, imgWidth, imgHeight, undefined, 'FAST');
-        currentY += imgHeight + 10;
-      } catch (imgErr) {
-        console.warn('Could not embed image directly in PDF:', imgErr);
-      }
+    // Extracted Line Items Matrix (Table Data with Clear Borders & Columns directly on Page 1)
+    let rowsToRender: string[][] = [];
+    if (tableData && tableData.length > 0) {
+      rowsToRender = OcrService.normalizeTable(tableData);
+    } else if (ocrText && ocrText.trim().length > 0) {
+      // Fallback: parse OCR text lines as rows
+      rowsToRender = ocrText
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0)
+        .map(l => [l]);
     }
 
-    // Extracted Line Items Matrix (Table Data with Clear Borders & Columns)
-    if (tableData && tableData.length > 0) {
-      const normalized = OcrService.normalizeTable(tableData);
-
+    if (rowsToRender.length > 0) {
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10.5);
       doc.setTextColor(15, 23, 42);
       doc.text('EXTRACTED DATA TABLE & COLUMNS', 14, currentY);
-      currentY += 4;
+      currentY += 4.5;
 
-      const head = [normalized[0]];
-      const body = normalized.slice(1);
+      const head = [rowsToRender[0]];
+      const body = rowsToRender.slice(1);
 
       autoTable(doc, {
         startY: currentY,
@@ -128,36 +113,6 @@ export class PdfService {
         },
         margin: { left: 14, right: 14 },
       });
-
-      // @ts-expect-error autoTable adds lastAutoTable to jsPDF instance
-      currentY = doc.lastAutoTable.finalY + 10;
-    }
-
-    // Check if new page is needed for OCR text
-    if (currentY > 230) {
-      doc.addPage();
-      currentY = 20;
-    }
-
-    // Recognized OCR Text Section
-    if (ocrText && ocrText.trim().length > 0) {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10.5);
-      doc.setTextColor(15, 23, 42);
-      doc.text('RECOGNIZED OCR TEXT CONTENT', 14, currentY);
-      currentY += 5;
-
-      const splitOcrLines = doc.splitTextToSize(ocrText, pageWidth - 36);
-      const boxHeight = Math.min(splitOcrLines.length * 4.2 + 8, 110);
-
-      doc.setFillColor(248, 250, 252);
-      doc.setDrawColor(203, 213, 225);
-      doc.roundedRect(14, currentY, pageWidth - 28, boxHeight, 2, 2, 'FD');
-
-      doc.setFont('courier', 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(15, 23, 42);
-      doc.text(splitOcrLines, 18, currentY + 5.5);
     }
 
     const blob = doc.output('blob');
