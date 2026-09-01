@@ -1,37 +1,60 @@
-name: nextunit_docuscan
-description: "NextUnit DocuScan - Flutter Document Scanner, OCR to Excel, PDF Generator, and Voice Note System"
+name: nextunit_docuscan_app
+description: "NextUnit DocuScan App - Complete Flutter Document Scanner, OCR, Scan to Excel/CSV, Voice Notes & Google Drive Integration"
 publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
-  flutter: ">=3.19.0"
+  sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
-  google_mlkit_text_recognition: ^0.13.0
-  camera: ^0.10.6
+  
+  # Core Camera & Image Pickers
+  camera: ^0.11.0+2
   image_picker: ^1.1.2
-  path_provider: ^2.1.4
-  path: ^1.9.0
+  
+  # Google ML Kit Text Recognition (OCR)
+  google_mlkit_text_recognition: ^0.13.0
+  google_mlkit_commons: ^0.8.0
+  
+  # Spreadsheet & Data Exporting
+  excel: ^4.0.6
+  csv: ^6.0.0
+  
+  # PDF Generation & Native Document Printing
   pdf: ^3.11.1
   printing: ^5.13.2
-  excel: ^4.0.3
-  csv: ^6.0.0
-  record: ^5.1.2
-  audioplayers: ^6.0.0
-  share_plus: ^10.0.2
-  open_file: ^3.3.2
+  
+  # File Management, Storage Access & Sharing
+  path_provider: ^2.1.4
+  path: ^1.9.0
+  share_plus: ^10.1.2
+  open_filex: ^4.5.0
+  file_picker: ^8.1.4
+  
+  # Audio / Voice Recording (Fixed startStream Conflict)
+  record: ^6.1.1
+  audioplayers: ^6.1.0
+  
+  # Permissions Handler
+  permission_handler: ^11.3.1
+  
+  # Cloud & Google Drive Integration
+  google_sign_in: ^6.2.2
+  googleapis: ^13.2.0
+  googleapis_auth: ^1.6.0
+  http: ^1.2.2
+  
+  # UI & Utilities
   intl: ^0.19.0
-  flutter_svg: ^2.0.10+1
-  shared_preferences: ^2.3.2
+  uuid: ^4.5.1
+  flutter_spinkit: ^5.2.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
