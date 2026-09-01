@@ -139,10 +139,11 @@ export function App() {
         text = matchingSample.ocrText;
         table = matchingSample.tableData;
       } else {
-        text = await OcrService.recognizeTextFromImage(imageSource, (progress, status) => {
+        const ocrResult = await OcrService.recognizeImageWithSpatialClustering(imageSource, (progress, status) => {
           setOcrProgress({ progress, status });
         });
-        table = OcrService.parseTextToTable(text);
+        text = ocrResult.text;
+        table = ocrResult.table;
       }
 
       setExtractedText(text || 'No text detected in this document.');

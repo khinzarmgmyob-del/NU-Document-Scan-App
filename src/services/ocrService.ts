@@ -13,7 +13,141 @@ async function getOcrWorker(onProgress?: (progress: number, status: string) => v
   return worker;
 }
 
+/**
+ * Spatial Clustering for Web OCR using Word Bounding Boxes (X/Y coordinates)
+ */
+export function extractSpatialTableFromWords(words: Array<{ text: string; bbox: { x0: number; y0: number; x1: number; y1: number } }>): string[][] {
+  if (!words || words.length === 0) return [];
+
+  // 1. Calculate median word height
+  const heights = words.map(w => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+  const medianH = heights[Math.floor(heights.length / 2)] || 16;
+  const yTolerance = Math.max(6, Math.min(18, medianH * 0.55));
+
+  // 2. Group into Horizontal Rows (Y-Clustering)
+  const rows: Array<Array<{ text: string; bbox: { x0: number; y0: number; x1: number; y1: number }; centerX: number; centerY: number }>> = [];
+  
+  const sortedWords = [...words].map(w => ({
+    ...w,
+    centerX: (w.bbox.x0 + w.bbox.x1) / 2,
+    centerY: (w.bbox.y0 + w.bbox.y1) / 2,
+  })).sort((a, b) => a.centerY - b.centerY || a.bbox.x0 - b.bbox.x0);
+
+  for (const word of sortedWords) {
+    let placed = false;
+    for (const r of rows) {
+      const avgY = r.reduce((sum, item) => sum + item.centerY, 0) / r.length;
+      if (Math.abs(word.centerY - avgY) <= yTolerance) {
+        r.push(word);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      rows.push([word]);
+    }
+  }
+
+  // Sort words left-to-right in each row
+  rows.forEach(r => r.sort((a, b) => a.bbox.x0 - b.bbox.x0));
+
+  // 3. Vertical Column Clustering (X-Axis intervals)
+  const columnRanges: Array<{ left: number; right: number; centerX: number }> = [];
+
+  for (const r of rows) {
+    for (const word of r) {
+      const left = word.bbox.x0;
+      const right = word.bbox.x1;
+      let merged = false;
+      for (const col of columnRanges) {
+        if ((left - 12) < (col.right + 12) && (right + 12) > (col.left - 12)) {
+          col.left = Math.min(col.left, left);
+          col.right = Math.max(col.right, right);
+          col.centerX = (col.left + col.right) / 2;
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        columnRanges.push({ left, right, centerX: (left + right) / 2 });
+      }
+    }
+  }
+
+  columnRanges.sort((a, b) => a.left - b.left);
+  if (columnRanges.length === 0) return [];
+
+  // 4. Map each row into detected column intervals
+  const table: string[][] = [];
+  for (const r of rows) {
+    const rowCells = new Array(columnRanges.length).fill('');
+    for (const word of r) {
+      let bestColIdx = 0;
+      let minDist = Infinity;
+      for (let c = 0; c < columnRanges.length; c++) {
+        const dist = Math.abs(word.centerX - columnRanges[c].centerX);
+        if (dist < minDist) {
+          minDist = dist;
+          bestColIdx = c;
+        }
+      }
+      rowCells[bestColIdx] = rowCells[bestColIdx] ? `${rowCells[bestColIdx]} ${word.text}` : word.text;
+    }
+    if (rowCells.some(c => c.trim().length > 0)) {
+      table.push(rowCells);
+    }
+  }
+
+  return table.length > 0 ? table : [];
+}
+
 export class OcrService {
+  /**
+   * Recognizes text and extracts structured 2D table using 2D Spatial Bounding Box Clustering
+   */
+  static async recognizeImageWithSpatialClustering(
+    imageSource: string | File | Blob,
+    onProgress?: (progress: number, status: string) => void
+  ): Promise<{ text: string; table: string[][] }> {
+    try {
+      if (onProgress) onProgress(0.1, 'Initializing Spatial OCR Engine...');
+      const worker = await getOcrWorker(onProgress);
+      if (onProgress) onProgress(0.3, 'Running Optical Recognition...');
+      
+      const result = await worker.recognize(imageSource);
+      if (onProgress) onProgress(0.85, 'Clustering spatial column coordinates...');
+      
+      const text = result.data.text.trim();
+      let table: string[][] = [];
+
+      // Extract using 2D Spatial Bounding Box Clustering Algorithm
+      if (result.data.words && result.data.words.length > 0) {
+        const words = result.data.words.map(w => ({
+          text: w.text.trim(),
+          bbox: {
+            x0: w.bbox.x0,
+            y0: w.bbox.y0,
+            x1: w.bbox.x1,
+            y1: w.bbox.y1,
+          }
+        })).filter(w => w.text.length > 0);
+
+        table = extractSpatialTableFromWords(words);
+      }
+
+      // Fallback to text parsing if spatial table produced no rows
+      if (table.length === 0 && text) {
+        table = OcrService.parseTextToTable(text);
+      }
+
+      if (onProgress) onProgress(1.0, 'Table Extraction Complete');
+      return { text, table };
+    } catch (err) {
+      console.error('Spatial OCR error:', err);
+      return { text: '', table: [] };
+    }
+  }
+
   /**
    * Recognizes text from image data URL, File, or Blob
    */
