@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/scanner_tab.dart';
 import 'screens/excel_tab.dart';
 import 'screens/voice_tab.dart';
 import 'screens/storage_tab.dart';
 import 'widgets/wave_background.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const NextUnitDocuScanApp());
 }
@@ -21,26 +20,9 @@ class NextUnitDocuScanApp extends StatefulWidget {
 class _NextUnitDocuScanAppState extends State<NextUnitDocuScanApp> {
   ThemeMode _themeMode = ThemeMode.light;
 
-  @override
-  void initState() {
-    super.initState();
-    _loadTheme();
-  }
-
-  Future<void> _loadTheme() async {
-    final prefs = await SharedPreferences.getInstance();
-    final isDark = prefs.getBool('isDark') ?? false;
+  void _toggleTheme() {
     setState(() {
-      _themeMode = isDark ? ThemeMode.dark : ThemeMode.light;
-    });
-  }
-
-  Future<void> _toggleTheme() async {
-    final prefs = await SharedPreferences.getInstance();
-    final isDark = _themeMode == ThemeMode.dark;
-    await prefs.setBool('isDark', !isDark);
-    setState(() {
-      _themeMode = isDark ? ThemeMode.light : ThemeMode.dark;
+      _themeMode = _themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
     });
   }
 
