@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, FileSpreadsheet, Plus, Trash2, Edit3, Table, Check, Wand2, Sparkles, SlidersHorizontal } from 'lucide-react';
+import { Download, FileSpreadsheet, Plus, Trash2, Edit3, Table, Check, Wand2, Sparkles, Cloud, SlidersHorizontal } from 'lucide-react';
 import { OcrService } from '../services/ocrService';
 
 interface ExcelTabProps {
@@ -8,6 +8,7 @@ interface ExcelTabProps {
   onExportExcel: () => void;
   onExportCsv: () => void;
   onGoToScan: () => void;
+  onOpenExportModal?: (defaultFormat?: 'pdf' | 'excel' | 'csv') => void;
 }
 
 export const ExcelTab: React.FC<ExcelTabProps> = ({
@@ -16,6 +17,7 @@ export const ExcelTab: React.FC<ExcelTabProps> = ({
   onExportExcel,
   onExportCsv,
   onGoToScan,
+  onOpenExportModal,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -95,15 +97,24 @@ export const ExcelTab: React.FC<ExcelTabProps> = ({
 
   return (
     <div className="space-y-4 max-w-4xl mx-auto pb-8">
-      {/* Export Action Buttons */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* Export Action Buttons (Save as Excel with Layouts / Google Drive) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <button
-          onClick={onExportExcel}
+          onClick={() => onOpenExportModal ? onOpenExportModal('excel') : onExportExcel()}
           disabled={tableRows.length === 0}
           className="flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 disabled:opacity-50 text-white font-semibold text-xs sm:text-sm shadow-md shadow-emerald-600/20 transition-all active:scale-[0.98]"
         >
           <Download className="w-4 h-4" />
-          <span>Export Excel (.xlsx)</span>
+          <span>Save as Excel (.xlsx)</span>
+        </button>
+
+        <button
+          onClick={() => onOpenExportModal ? onOpenExportModal('excel') : null}
+          disabled={tableRows.length === 0}
+          className="flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 text-white font-semibold text-xs sm:text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98]"
+        >
+          <Cloud className="w-4 h-4" />
+          <span>Upload to Google Drive</span>
         </button>
 
         <button
@@ -305,4 +316,3 @@ export const ExcelTab: React.FC<ExcelTabProps> = ({
     </div>
   );
 };
-

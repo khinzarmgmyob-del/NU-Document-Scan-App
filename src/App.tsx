@@ -19,10 +19,12 @@ import { StorageTab } from './components/StorageTab';
 import { BSetupTab } from './components/BSetupTab';
 import { CameraModal } from './components/CameraModal';
 import { DocumentReaderModal } from './components/DocumentReaderModal';
+import { ExportModal } from './components/ExportModal';
 import { OcrService, SAMPLE_DOCUMENTS } from './services/ocrService';
 import { SpreadsheetService } from './services/spreadsheetService';
 import { PdfService } from './services/pdfService';
 import { StorageService } from './services/storageService';
+import { NativeExportService } from './services/nativeExportService';
 import { VoiceService } from './services/voiceService';
 import { DriveService } from './services/driveService';
 import { UserService } from './services/userService';
@@ -87,6 +89,9 @@ export function App() {
 
   // Modals
   const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [exportModalFormat, setExportModalFormat] = useState<'pdf' | 'excel' | 'csv'>('pdf');
+  const [exportModalLayoutMode, setExportModalLayoutMode] = useState<ExportLayoutMode>('framed');
   const [readerModal, setReaderModal] = useState<{
     isOpen: boolean;
     file: LocalFileItem | null;
@@ -97,6 +102,49 @@ export function App() {
     isOpen: false,
     file: null,
   });
+
+  const handleOpenExportModal = (format: 'pdf' | 'excel' | 'csv' = 'pdf', layoutMode: ExportLayoutMode = 'framed') => {
+    setExportModalFormat(format);
+    setExportModalLayoutMode(layoutMode);
+    setIsExportModalOpen(true);
+  };
+
+  const handleFileSavedLocally = (newFile: {
+    id: string;
+    name: string;
+    extension: string;
+    blob: Blob;
+    dataUrl?: string;
+    driveSynced: boolean;
+  }) => {
+    const isPdf = newFile.extension === 'pdf';
+    const isExcel = newFile.extension === 'xlsx';
+    const isCsv = newFile.extension === 'csv';
+
+    const newFileItem: LocalFileItem = {
+      id: newFile.id,
+      path: `/storage/${newFile.name}`,
+      name: newFile.name,
+      extension: newFile.extension,
+      sizeBytes: newFile.blob.size,
+      modifiedAt: new Date().toISOString(),
+      isPdf,
+      isExcel,
+      isCsv,
+      isAudio: false,
+      dataUrl: newFile.dataUrl,
+      textContent: extractedText,
+      tableData: tableRows,
+      driveSynced: newFile.driveSynced,
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      branch: currentUser.branch,
+    };
+
+    const updatedFiles = StorageService.addLocalFile(newFileItem);
+    setLocalFiles(updatedFiles);
+  };
 
   // Toasts
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -197,7 +245,7 @@ export function App() {
         text = geminiResult.text;
         table = geminiResult.table;
         if (geminiResult.engine === 'gemini') {
-          setLastEngineUsed('✨ AI Smart Vision (Gemini 3.7 Flash)');
+          setLastEngineUsed('✨ AI Smart Vision (Gemini Flash)');
           setEngineWarning(null);
         } else {
           setLastEngineUsed('⚡ Fast 2D Spatial Engine (Fallback)');
@@ -251,18 +299,33 @@ export function App() {
     }
 
     try {
-      const { blob, fileName, dataUrl } = await PdfService.generateAndSavePdf({
+      const timeStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+      const cleanTitle = currentDocTitle || `DocuScan_${timeStamp}`;
+      const fullFileName = `${cleanTitle}.pdf`;
+
+      const { blob, dataUrl } = await PdfService.generateAndSavePdf({
         title: currentDocTitle,
         imageSrc: scannedImage || undefined,
         ocrText: extractedText,
         tableData: tableRows.length > 0 ? tableRows : undefined,
+        customFileName: cleanTitle,
       });
+
+      // Also trigger Native Capacitor Mobile auto-opener if on mobile
+      if (NativeExportService.isNative()) {
+        await NativeExportService.exportAndOpenPdf({
+          title: currentDocTitle,
+          ocrText: extractedText,
+          tableData: tableRows.length > 0 ? tableRows : undefined,
+          fileName: cleanTitle,
+        });
+      }
 
       const now = new Date();
       const newFileItem: LocalFileItem = {
         id: `pdf-${Date.now()}`,
-        path: `/storage/${fileName}`,
-        name: fileName,
+        path: `/storage/${fullFileName}`,
+        name: fullFileName,
         extension: 'pdf',
         sizeBytes: blob.size,
         modifiedAt: now.toISOString(),
@@ -282,7 +345,7 @@ export function App() {
 
       const updatedFiles = StorageService.addLocalFile(newFileItem);
       setLocalFiles(updatedFiles);
-      showToast(`Saved PDF locally: ${fileName}`);
+      showToast(`Saved PDF locally: ${fullFileName}`);
     } catch (e) {
       console.error('PDF error:', e);
       showToast('Failed to save PDF.', 'error');
@@ -290,9 +353,9 @@ export function App() {
   };
 
   // --- Export Excel (.xlsx) ---
-  const handleExportExcel = () => {
-    if (tableRows.length === 0) {
-      showToast('No tabular data found to export.', 'error');
+  const handleExportExcel = async () => {
+    if (tableRows.length === 0 && !extractedText.trim()) {
+      showToast('No tabular data or text content found to export.', 'error');
       return;
     }
 
@@ -302,7 +365,23 @@ export function App() {
       const { blob, fileName: fullFileName } = SpreadsheetService.exportToExcel({
         fileName,
         tableData: tableRows,
+        ocrText: extractedText,
       });
+
+      // Convert blob to DataURL for offline storage caching
+      const dataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+
+      // Also trigger Native Capacitor Mobile auto-opener if on mobile
+      if (NativeExportService.isNative()) {
+        await NativeExportService.exportAndOpenExcel({
+          fileName,
+          tableData: tableRows,
+        });
+      }
 
       const newFileItem: LocalFileItem = {
         id: `excel-${Date.now()}`,
@@ -315,6 +394,7 @@ export function App() {
         isExcel: true,
         isCsv: false,
         isAudio: false,
+        dataUrl,
         tableData: tableRows,
         driveSynced: driveAccount.isSignedIn,
         userId: currentUser.id,
@@ -325,7 +405,7 @@ export function App() {
 
       const updatedFiles = StorageService.addLocalFile(newFileItem);
       setLocalFiles(updatedFiles);
-      showToast(`Exported successfully: ${fullFileName}`);
+      showToast(`1:1 Excel exported & saved: ${fullFileName}`);
     } catch (e) {
       console.error('Excel export error:', e);
       showToast('Failed to export Excel spreadsheet.', 'error');
@@ -333,7 +413,7 @@ export function App() {
   };
 
   // --- Export CSV (.csv) ---
-  const handleExportCsv = () => {
+  const handleExportCsv = async () => {
     if (tableRows.length === 0) {
       showToast('No tabular data found to export.', 'error');
       return;
@@ -347,6 +427,21 @@ export function App() {
         tableData: tableRows,
       });
 
+      // Convert blob to DataURL
+      const dataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+
+      // Also trigger Native Capacitor Mobile auto-opener if on mobile
+      if (NativeExportService.isNative()) {
+        await NativeExportService.exportAndOpenCsv({
+          fileName,
+          tableData: tableRows,
+        });
+      }
+
       const newFileItem: LocalFileItem = {
         id: `csv-${Date.now()}`,
         path: `/storage/${fullFileName}`,
@@ -358,6 +453,7 @@ export function App() {
         isExcel: false,
         isCsv: true,
         isAudio: false,
+        dataUrl,
         textContent: csvContent,
         tableData: tableRows,
         driveSynced: driveAccount.isSignedIn,
@@ -509,6 +605,8 @@ export function App() {
           <ScannerTab
             scannedImage={scannedImage}
             extractedText={extractedText}
+            tableRows={tableRows}
+            onUpdateTableRows={setTableRows}
             isProcessingOcr={isProcessingOcr}
             ocrProgress={ocrProgress}
             selectedEngine={selectedEngine}
@@ -519,7 +617,10 @@ export function App() {
             onImageSelected={processImageForOcr}
             onTextChange={setExtractedText}
             onSaveAsPdf={handleSaveAsPdf}
+            onExportExcelDirectly={handleExportExcel}
             onGoToExcel={() => setActiveTab('excel')}
+            onOpenExportModal={handleOpenExportModal}
+            onQuickUploadToDrive={() => handleOpenExportModal('pdf')}
             onClearScan={() => {
               setScannedImage(null);
               setExtractedText('');
@@ -537,6 +638,7 @@ export function App() {
             onExportExcel={handleExportExcel}
             onExportCsv={handleExportCsv}
             onGoToScan={() => setActiveTab('scan')}
+            onOpenExportModal={handleOpenExportModal}
           />
         )}
 
@@ -657,7 +759,7 @@ export function App() {
             <span className="text-[11px] tracking-tight">Storage &amp; Drive</span>
           </button>
 
-          {/* Destination 5: B setup (Admin Only) */}
+          {/* Destination 5: Setup (Admin Only) */}
           {isAdmin && (
             <button
               onClick={() => setActiveTab('bsetup')}
@@ -674,7 +776,7 @@ export function App() {
               >
                 <SlidersHorizontal className="w-5 h-5" />
               </div>
-              <span className="text-[11px] tracking-tight">B setup</span>
+              <span className="text-[11px] tracking-tight">Setup</span>
             </button>
           )}
         </div>
@@ -696,14 +798,11 @@ export function App() {
         ocrText={readerModal.ocrText}
         tableData={readerModal.tableData}
         onDownload={() => {
-          if (readerModal.file?.dataUrl) {
-            const a = document.createElement('a');
-            a.href = readerModal.file.dataUrl;
-            a.download = readerModal.file.name;
-            a.click();
-          } else if (readerModal.ocrText) {
-            PdfService.generateAndSavePdf({
-              title: readerModal.file?.name || 'Document',
+          if (readerModal.file) {
+            StorageService.downloadFile(readerModal.file);
+          } else if (readerModal.ocrText || (readerModal.tableData && readerModal.tableData.length > 0)) {
+            NativeExportService.exportAndOpenPdf({
+              title: 'Document',
               ocrText: readerModal.ocrText,
               tableData: readerModal.tableData,
             });
@@ -721,6 +820,21 @@ export function App() {
             }).catch(() => {});
           }
         }}
+      />
+
+      {/* Save as / Export with Frame Cards, Text Flow, Matrix & Google Drive Upload Modal */}
+      <ExportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        title={currentDocTitle}
+        imageSrc={scannedImage}
+        extractedText={extractedText}
+        tableData={tableRows}
+        driveAccount={driveAccount}
+        initialFormat={exportModalFormat}
+        initialLayoutMode={exportModalLayoutMode}
+        onFileSavedLocally={handleFileSavedLocally}
+        onToast={showToast}
       />
 
       {/* Toast Notification */}

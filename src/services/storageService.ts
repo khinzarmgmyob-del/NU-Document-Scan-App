@@ -2,6 +2,7 @@ import { DocumentItem, LocalFileItem } from '../types';
 import { SpreadsheetService } from './spreadsheetService';
 import { PdfService } from './pdfService';
 import { OcrService } from './ocrService';
+import { NativeExportService } from './nativeExportService';
 
 const STORAGE_KEY_DOCS = 'nextunit_docuscan_documents';
 const STORAGE_KEY_FILES = 'nextunit_docuscan_files';
@@ -112,95 +113,11 @@ export class StorageService {
 
   /**
    * Universal downloader for any LocalFileItem:
-   * Handles Excel (.xlsx), CSV (.csv), PDF (.pdf), Audio, Text, Images with 100% guarantee.
+   * Handles Excel (.xlsx), CSV (.csv), PDF (.pdf), Audio, Text, Images with 100% guarantee
+   * on both Native Mobile (Capacitor Filesystem + FileOpener) and Web Browsers.
    */
   static downloadFile(file: LocalFileItem): void {
-    try {
-      // 1. Excel Spreadsheet (.xlsx)
-      if (file.isExcel || file.extension === 'xlsx' || file.name.toLowerCase().endsWith('.xlsx')) {
-        if (file.dataUrl && file.dataUrl.startsWith('data:')) {
-          this.triggerDownload(file.dataUrl, file.name);
-          return;
-        }
-
-        const baseName = file.name.replace(/\.xlsx$/i, '');
-        let table = file.tableData && file.tableData.length > 0 ? file.tableData : null;
-        if (!table && file.textContent) {
-          table = OcrService.parseTableFromText(file.textContent);
-        }
-        if (!table || table.length === 0) {
-          table = [
-            ['Column 1', 'Column 2', 'Column 3'],
-            ['Extracted Data', file.name, new Date().toLocaleDateString()],
-          ];
-        }
-
-        SpreadsheetService.exportToExcel({
-          fileName: baseName,
-          tableData: table,
-        });
-        return;
-      }
-
-      // 2. CSV Spreadsheet (.csv)
-      if (file.isCsv || file.extension === 'csv' || file.name.toLowerCase().endsWith('.csv')) {
-        if (file.dataUrl && file.dataUrl.startsWith('data:')) {
-          this.triggerDownload(file.dataUrl, file.name);
-          return;
-        }
-
-        const baseName = file.name.replace(/\.csv$/i, '');
-        let table = file.tableData && file.tableData.length > 0 ? file.tableData : null;
-        if (!table && file.textContent) {
-          table = OcrService.parseTableFromText(file.textContent);
-        }
-        if (!table || table.length === 0) {
-          table = [
-            ['Column 1', 'Column 2', 'Column 3'],
-            ['Extracted CSV', file.name, new Date().toLocaleDateString()],
-          ];
-        }
-
-        SpreadsheetService.exportToCsv({
-          fileName: baseName,
-          tableData: table,
-        });
-        return;
-      }
-
-      // 3. Direct dataUrl exists (PDFs, Images, Audio, Data URLs)
-      if (file.dataUrl && file.dataUrl.length > 0) {
-        this.triggerDownload(file.dataUrl, file.name);
-        return;
-      }
-
-      // 4. PDF fallback generator
-      if (file.isPdf || file.extension === 'pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-        PdfService.generateAndSavePdf({
-          title: file.name.replace(/\.pdf$/i, ''),
-          ocrText: file.textContent || 'No OCR text available.',
-          tableData: file.tableData,
-        });
-        return;
-      }
-
-      // 5. Text / Audio note text fallback
-      if (file.textContent) {
-        const blob = new Blob([file.textContent], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        this.triggerDownload(url, file.name.includes('.') ? file.name : `${file.name}.txt`);
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-        return;
-      }
-
-      // 6. Generic blank fallback
-      const blob = new Blob([`File: ${file.name}\nExported from NextUnit DocuScan`], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      this.triggerDownload(url, `${file.name}.txt`);
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
-    } catch (err) {
-      console.error('Error downloading file:', err);
-    }
+    NativeExportService.exportAndOpenLocalFile(file);
   }
 
   /**

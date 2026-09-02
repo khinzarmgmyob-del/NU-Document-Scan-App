@@ -394,64 +394,140 @@ export class OcrService {
    * Test Gemini API Key connectivity
    */
   static async testGeminiApiKey(key: string): Promise<{ success: boolean; message: string }> {
+    const trimmed = (key || '').trim();
+    if (!trimmed) {
+      return { success: false, message: 'Please enter a valid Google Gemini API Key' };
+    }
+
+    // 1. Try server-side endpoint /api/gemini/test-key
     try {
       const res = await fetch('/api/gemini/test-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: key.trim() }),
+        body: JSON.stringify({ apiKey: trimmed }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        return { success: false, message: data.error || 'Failed to connect to Google Gemini' };
+
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data.success) {
+          return {
+            success: true,
+            message: `Connected to Google Gemini (${data.modelUsed || 'AI Flash'})!`,
+          };
+        } else if (data.error) {
+          return { success: false, message: data.error };
+        }
       }
-      return { success: true, message: `Connected to Google Gemini (${data.modelUsed || 'AI Flash'})!` };
     } catch (err: any) {
-      return { success: false, message: err.message || 'Network error testing API Key' };
+      console.warn('Server test-key proxy check:', err);
+    }
+
+    // 2. Direct validation against Google Gemini ListModels API as reliable client fallback
+    try {
+      const googleRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(trimmed)}`
+      );
+      if (googleRes.ok) {
+        return { success: true, message: 'Connected to Google Gemini AI successfully!' };
+      } else {
+        const errorData = await googleRes.json().catch(() => ({}));
+        const msg = errorData?.error?.message || `Google API returned status ${googleRes.status}`;
+        return { success: false, message: msg };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || 'Network error verifying API Key with Google AI Studio',
+      };
     }
   }
 
   /**
-   * AI Smart Vision Table Extraction using Gemini 3.7 Flash (100% Accurate Table Matrix)
-   * Calls the server-side /api/gemini/table-extract endpoint with automatic fallback.
+   * Fast client-side image compressor for rapid upload and fast AI inference (max 1280px, JPEG 0.85)
+   */
+  static async prepareCompressedBase64(imageSource: string | File | Blob): Promise<{ base64: string; mimeType: string }> {
+    return new Promise((resolve) => {
+      let srcUrl = '';
+      let isObjectUrl = false;
+
+      if (typeof imageSource === 'string') {
+        srcUrl = imageSource;
+      } else {
+        srcUrl = URL.createObjectURL(imageSource);
+        isObjectUrl = true;
+      }
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const maxDim = 1280;
+          let width = img.naturalWidth || img.width || 800;
+          let height = img.naturalHeight || img.height || 600;
+
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(width, 100);
+          canvas.height = Math.max(height, 100);
+
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+            resolve({ base64: srcUrl, mimeType: 'image/jpeg' });
+            return;
+          }
+
+          // White background
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          const base64 = canvas.toDataURL('image/jpeg', 0.85);
+          if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+          resolve({ base64, mimeType: 'image/jpeg' });
+        } catch {
+          if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+          resolve({ base64: srcUrl, mimeType: 'image/jpeg' });
+        }
+      };
+
+      img.onerror = () => {
+        if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+        resolve({ base64: srcUrl, mimeType: 'image/jpeg' });
+      };
+
+      img.src = srcUrl;
+    });
+  }
+
+  /**
+   * AI Smart Vision Table Extraction using Gemini Flash (Fast, Accurate Table Matrix & Unicode)
+   * Calls the server-side /api/gemini/table-extract endpoint with automatic direct Google API fallback.
    */
   static async recognizeImageWithGeminiVision(
     imageSource: string | File | Blob,
     onProgress?: (progress: number, status: string) => void
   ): Promise<{ text: string; table: string[][]; engine: 'gemini' | 'spatial'; error?: string }> {
     const apiKey = this.getStoredApiKey();
+    const { base64: base64Data, mimeType } = await this.prepareCompressedBase64(imageSource);
+    const cleanBase64 = base64Data.replace(/^data:image\/[a-zA-Z0-9.+_-]+;base64,/, '');
+
+    // 1. First Attempt: Server-side API proxy /api/gemini/table-extract
     try {
-      if (onProgress) onProgress(0.15, 'Preparing document for AI Vision...');
+      if (onProgress) onProgress(0.2, 'AI Smart Vision analyzing document structure & Unicode...');
 
-      let base64Data = '';
-      let mimeType = 'image/jpeg';
-
-      if (typeof imageSource === 'string') {
-        const rasterSrc = await ensureRasterImage(imageSource);
-        if (rasterSrc.startsWith('data:')) {
-          const match = rasterSrc.match(/^data:(image\/[a-zA-Z0-9.+_-]+);base64,/);
-          if (match) mimeType = match[1];
-          base64Data = rasterSrc;
-        } else {
-          // Fetch as blob
-          const res = await fetch(rasterSrc);
-          const blob = await res.blob();
-          mimeType = blob.type || 'image/jpeg';
-          base64Data = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.readAsDataURL(blob);
-          });
-        }
-      } else if (imageSource instanceof Blob) {
-        mimeType = imageSource.type || 'image/jpeg';
-        base64Data = await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(imageSource);
-        });
-      }
-
-      if (onProgress) onProgress(0.4, 'AI Vision analyzing document structure...');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
 
       const response = await fetch('/api/gemini/table-extract', {
         method: 'POST',
@@ -461,36 +537,115 @@ export class OcrService {
           mimeType,
           apiKey: apiKey || undefined,
         }),
+        signal: controller.signal,
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server returned ${response.status}`);
+      clearTimeout(timeoutId);
+
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const result = await response.json();
+        if (result.success && (result.text || (result.table && result.table.length > 0))) {
+          if (onProgress) onProgress(1.0, 'AI Table Extraction Complete');
+          const rawTable = result.table && Array.isArray(result.table) ? result.table : [];
+          const normalizedTable = rawTable.length > 0 
+            ? OcrService.normalizeTable(rawTable)
+            : OcrService.parseTextToTable(result.text || '');
+
+          return {
+            text: result.text || '',
+            table: normalizedTable,
+            engine: 'gemini',
+          };
+        }
       }
-
-      const result = await response.json();
-      if (onProgress) onProgress(1.0, 'AI Table Extraction Complete');
-
-      const rawTable = result.table && Array.isArray(result.table) ? result.table : [];
-      const normalizedTable = rawTable.length > 0 
-        ? OcrService.normalizeTable(rawTable)
-        : OcrService.parseTextToTable(result.text || '');
-
-      return {
-        text: result.text || '',
-        table: normalizedTable,
-        engine: 'gemini',
-      };
     } catch (err: any) {
-      console.warn('Gemini Vision failed, falling back to 2D Spatial OCR:', err.message || err);
-      if (onProgress) onProgress(0.5, 'Using 2D Spatial Clustering Engine...');
-      const fallbackResult = await OcrService.recognizeImageWithSpatialClustering(imageSource, onProgress);
-      return {
-        ...fallbackResult,
-        engine: 'spatial',
-        error: err.message || 'Gemini Vision unavailable. Please check API Key in Settings.',
-      };
+      console.warn('Server table-extract endpoint issue:', err.message || err);
     }
+
+    // 2. Second Attempt: Direct Client-Side Gemini Vision API call (if user has API Key)
+    if (apiKey) {
+      const CANDIDATE_DIRECT_MODELS = ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+      for (const model of CANDIDATE_DIRECT_MODELS) {
+        try {
+          if (onProgress) onProgress(0.5, `Connecting directly to Google Gemini (${model})...`);
+          const prompt = 
+            "You are an expert Document Intelligence, Multilingual OCR, and High-Precision Table & Structure Extraction Engine.\n" +
+            "You have native, fluent understanding of Myanmar Unicode (မြန်မာ ယူနီကုဒ် / Unicode 5.2+), English, and international character sets.\n\n" +
+            "MANDATORY OCR & EXTRACTION INSTRUCTIONS:\n" +
+            "1. Transcribe ALL visible text into 'fullText' with 100% exact fidelity in Myanmar Unicode and English.\n" +
+            "2. Preserve every section, bullet point, checkmark, note (မှတ်ချက်), and technical term.\n" +
+            "3. Extract structured 2D table matrix into 'table':\n" +
+            "   - For tables/invoices: Row 0 is column headers, following rows are values.\n" +
+            "   - For guides/infographics/notices: Extract 3-column table: ['ကဏ္ဍ / အပိုင်း (Section)', 'အကြောင်းအရာ (Topic / Point)', 'အသေးစိတ် ရှင်းလင်းချက် (Details / Action)'].\n" +
+            "Return strictly valid JSON with format: {\"fullText\": \"...\", \"table\": [[\"...\", \"...\"]]}";
+
+          const directRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    parts: [
+                      { inlineData: { mimeType, data: cleanBase64 } },
+                      { text: prompt },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  temperature: 0.1,
+                  responseMimeType: 'application/json',
+                },
+              }),
+            }
+          );
+
+          if (directRes.ok) {
+            const data = await directRes.json();
+            const textContent = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (textContent) {
+              let parsed: any = {};
+              try {
+                parsed = JSON.parse(textContent);
+              } catch {
+                parsed = { fullText: textContent, table: [] };
+              }
+
+              if (onProgress) onProgress(1.0, 'AI Vision Extraction Complete');
+              const rawTable = parsed.table && Array.isArray(parsed.table) ? parsed.table : [];
+              const normalizedTable = rawTable.length > 0 
+                ? OcrService.normalizeTable(rawTable)
+                : OcrService.parseTextToTable(parsed.fullText || textContent);
+
+              return {
+                text: parsed.fullText || textContent || '',
+                table: normalizedTable,
+                engine: 'gemini',
+              };
+            }
+          }
+        } catch (directErr) {
+          console.warn(`Direct client call to ${model} failed:`, directErr);
+        }
+      }
+    }
+
+    // 3. Fallback when AI Vision is unavailable
+    if (!apiKey) {
+      console.warn('No Gemini API key stored. Fast Spatial OCR will run, but Myanmar Unicode requires Gemini Key.');
+    }
+
+    if (onProgress) onProgress(0.7, 'Using local 2D Spatial Clustering Engine...');
+    const fallbackResult = await OcrService.recognizeImageWithSpatialClustering(imageSource, onProgress);
+    return {
+      ...fallbackResult,
+      engine: 'spatial',
+      error: apiKey 
+        ? 'Gemini Vision connection timeout. Used local Spatial Engine.'
+        : '⚠️ မြန်မာစာ ယူနီကုဒ် အပြည့်အဝ ဖတ်ရှုနိုင်ရန် Google Gemini API Key ထည့်သွင်းပေးပါ။ (Used local Spatial Engine)',
+    };
   }
 
   /**
@@ -506,10 +661,21 @@ export class OcrService {
       const enhancedSource = await preprocessImageForOcr(imageSource);
 
       if (onProgress) onProgress(0.25, 'Initializing Spatial OCR Engine...');
-      const worker = await getOcrWorker(onProgress);
+      
+      const workerPromise = getOcrWorker(onProgress);
+      const workerTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Spatial OCR worker initialization timed out')), 12000)
+      );
+      const worker = await Promise.race([workerPromise, workerTimeout]);
+
       if (onProgress) onProgress(0.45, 'Running Optical Recognition...');
       
-      const result = await worker.recognize(enhancedSource);
+      const recogPromise = worker.recognize(enhancedSource);
+      const recogTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Spatial OCR recognition timed out')), 15000)
+      );
+      const result = await Promise.race([recogPromise, recogTimeout]);
+
       if (onProgress) onProgress(0.85, 'Clustering spatial column coordinates...');
       
       let text = (result.data.text || '')
@@ -709,6 +875,271 @@ export class OcrService {
 
     return normalized;
   }
+
+  /**
+   * Parse extracted raw text and table into structured document layout blocks
+   * with colored status themes, titles, bullet items with checkmarks, and notes.
+   * Guarantees 100% preservation of all lines and paragraphs.
+   */
+  static parseTextToSections(
+    rawText: string,
+    tableData?: string[][]
+  ): { title: string; subtitle: string; sections: any[] } {
+    const lines = (rawText || '').split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) {
+      return {
+        title: 'Extracted Document',
+        subtitle: 'DocuScan Formatted OCR',
+        sections: tableData && tableData.length > 0 ? [{ type: 'table', title: 'Data Table', table: tableData }] : [],
+      };
+    }
+
+    let title = lines[0] || 'Scanned Document';
+    let subtitle = '';
+    let startIdx = 1;
+
+    if (lines.length > 1 && !lines[1].startsWith('✔') && !lines[1].startsWith('•') && !lines[1].startsWith('-') && !lines[1].startsWith('*') && !lines[1].includes('|')) {
+      subtitle = lines[1];
+      startIdx = 2;
+    }
+
+    const sections: any[] = [];
+    let currentSection: {
+      type: 'standard_box' | 'danger_box' | 'warning_box' | 'table' | 'paragraph' | 'notes';
+      title: string;
+      colorTheme: 'emerald' | 'blue' | 'red' | 'amber' | 'slate' | 'yellow';
+      items: { text: string; subtext?: string; isCheck?: boolean }[];
+      content?: string;
+    } | null = null;
+
+    const determineTheme = (titleText: string): { type: any; colorTheme: any } => {
+      const lower = titleText.toLowerCase();
+      if (
+        lower.includes('ပြဿနာ') ||
+        lower.includes('corrupt') ||
+        lower.includes('ပျက်စီး') ||
+        lower.includes('problem') ||
+        lower.includes('error') ||
+        lower.includes('fail')
+      ) {
+        return { type: 'danger_box', colorTheme: 'red' };
+      }
+      if (
+        lower.includes('မှတ်ချက်') ||
+        lower.includes('သတိပေးချက်') ||
+        lower.includes('warning') ||
+        lower.includes('caution') ||
+        lower.includes('note')
+      ) {
+        return { type: 'warning_box', colorTheme: 'amber' };
+      }
+      if (
+        lower.includes('standard') ||
+        lower.includes('နည်းလမ်း') ||
+        lower.includes('guide') ||
+        lower.includes('instruction') ||
+        lower.includes('sop')
+      ) {
+        return { type: 'standard_box', colorTheme: 'blue' };
+      }
+      if (
+        lower.includes('ရွေးချယ်စရာ') ||
+        lower.includes('option') ||
+        lower.includes('solution') ||
+        lower.includes('repair') ||
+        lower.includes('rdpnight')
+      ) {
+        return { type: 'standard_box', colorTheme: 'emerald' };
+      }
+      return { type: 'standard_box', colorTheme: 'slate' };
+    };
+
+    for (let i = startIdx; i < lines.length; i++) {
+      const line = lines[i];
+
+      // 1. Note line detection
+      const isNote = line.startsWith('မှတ်ချက်') || line.startsWith('*') || line.startsWith('Note:');
+      if (isNote) {
+        if (currentSection) {
+          currentSection.content = (currentSection.content ? currentSection.content + '\n' : '') + line;
+        } else {
+          sections.push({
+            type: 'warning_box',
+            title: 'မှတ်ချက် / သတိပေးချက် (Important Note)',
+            colorTheme: 'yellow',
+            content: line,
+            items: [],
+          });
+        }
+        continue;
+      }
+
+      // 2. Inline Table Row detection (e.g. Item | Qty | Price)
+      if (line.includes('|')) {
+        const parts = line.split('|').map(p => p.trim());
+        if (parts.length >= 2) {
+          if (!currentSection) {
+            currentSection = {
+              type: 'standard_box',
+              title: 'စာရင်း အချက်အလက်များ (Table Data)',
+              colorTheme: 'blue',
+              items: [],
+            };
+          }
+          currentSection.items.push({
+            text: parts[0],
+            subtext: parts.slice(1).join(' | '),
+            isCheck: false,
+          });
+          continue;
+        }
+      }
+
+      // 3. Bullet line detection
+      const isBullet =
+        line.startsWith('✔') ||
+        line.startsWith('•') ||
+        line.startsWith('- ') ||
+        line.startsWith('— ') ||
+        /^\d+[.)]/.test(line);
+
+      // 4. Section Title detection (clean short headers or known keywords)
+      const isSectionHeadingCandidate =
+        !isBullet &&
+        (line.length < 60 ||
+          line.includes('Standard') ||
+          line.includes('နည်းလမ်း') ||
+          line.includes('ပြဿနာ') ||
+          line.includes('ရွေးချယ်စရာ') ||
+          line.includes('Solution') ||
+          line.includes('အကြောင်းအရာ') ||
+          line.includes('အချက်အလက်') ||
+          line.includes('အဆင့်') ||
+          line.includes('ညွှန်ကြားချက်'));
+
+      if (isSectionHeadingCandidate) {
+        // If current section exists, commit it
+        if (currentSection && (currentSection.items.length > 0 || currentSection.content || currentSection.title)) {
+          sections.push(currentSection);
+        }
+        const { type, colorTheme } = determineTheme(line);
+        currentSection = {
+          type,
+          title: line,
+          colorTheme,
+          items: [],
+        };
+        continue;
+      }
+
+      // 5. Normal line / Item line / Paragraph line
+      let cleanText = line.replace(/^[✔•\-\*—]\s*/, '').replace(/^\d+[.)]\s*/, '').trim();
+      let subtext = '';
+
+      if (cleanText.includes('–')) {
+        const parts = cleanText.split('–');
+        cleanText = parts[0].trim();
+        subtext = parts.slice(1).join('–').trim();
+      } else if (cleanText.includes(' : ')) {
+        const parts = cleanText.split(' : ');
+        cleanText = parts[0].trim();
+        subtext = parts.slice(1).join(' : ').trim();
+      } else if (cleanText.includes(': ') && !cleanText.startsWith('http')) {
+        const parts = cleanText.split(': ');
+        cleanText = parts[0].trim();
+        subtext = parts.slice(1).join(': ').trim();
+      }
+
+      // Check if next line is a subtext
+      if (i + 1 < lines.length && (lines[i + 1].startsWith('- ') || lines[i + 1].startsWith('  '))) {
+        subtext = (subtext ? subtext + ' ' : '') + lines[i + 1].replace(/^[-\s]+/, '').trim();
+        i++;
+      }
+
+      if (!currentSection) {
+        currentSection = {
+          type: 'standard_box',
+          title: 'အဓိက အချက်အလက်များ (Key Information)',
+          colorTheme: 'blue',
+          items: [],
+        };
+      }
+
+      currentSection.items.push({
+        text: cleanText,
+        subtext,
+        isCheck: line.startsWith('✔') || isBullet,
+      });
+    }
+
+    if (currentSection && (currentSection.items.length > 0 || currentSection.content || currentSection.title)) {
+      sections.push(currentSection);
+    }
+
+    // If tableData is present, append as structured table section
+    if (tableData && tableData.length > 0) {
+      sections.push({
+        type: 'table',
+        title: 'ဇယားကွက် အချက်အလက်များ (Structured Table Matrix)',
+        colorTheme: 'emerald',
+        table: this.normalizeTable(tableData),
+        items: [],
+      });
+    }
+
+    return { title, subtitle, sections };
+  }
+
+  /**
+   * AI-Powered Auto-Frame, Auto-Alignment, and Line/Column Beautifier
+   * Restructures text and tables with perfect Myanmar Unicode and responsive layout cards.
+   */
+  static async autoFormatAndAlignLayout(
+    text: string,
+    table?: string[][]
+  ): Promise<{
+    title: string;
+    subtitle?: string;
+    formattedText: string;
+    sections: any[];
+    table?: string[][];
+  }> {
+    const apiKey = this.getStoredApiKey();
+
+    // 1. Try server-side AI Auto-Format endpoint
+    try {
+      const res = await fetch('/api/gemini/format-layout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, table, apiKey }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.sections && data.sections.length > 0) {
+          return {
+            title: data.title || 'Formatted Document',
+            subtitle: data.subtitle || '',
+            formattedText: data.formattedText || text,
+            sections: data.sections,
+            table: data.table && data.table.length > 0 ? this.normalizeTable(data.table) : table,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('AI format layout endpoint error, using intelligent local heuristic:', err);
+    }
+
+    // 2. Intelligent local layout parsing fallback
+    const parsed = this.parseTextToSections(text, table);
+    return {
+      title: parsed.title,
+      subtitle: parsed.subtitle,
+      formattedText: text,
+      sections: parsed.sections,
+      table: table && table.length > 0 ? this.normalizeTable(table) : undefined,
+    };
+  }
 }
 
 export interface SampleDoc {
@@ -722,6 +1153,45 @@ export interface SampleDoc {
 }
 
 export const SAMPLE_DOCUMENTS: SampleDoc[] = [
+  {
+    id: 'sample-myob-guide',
+    name: 'MYOB_ABSS_Accounting_Guide.png',
+    category: 'MYOB/ABSS Guide (မြန်မာ)',
+    description: 'MYOB/ABSS စနစ်တကျ အသုံးပြုနည်းနှင့် ပြုပြင်ထိန်းသိမ်းခြင်းဆိုင်ရာ လမ်းညွှန်ချက်',
+    imageUrl: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="850" viewBox="0 0 600 850" fill="%23ffffff"><rect width="600" height="850" fill="%23F8FAFC"/><rect x="0" y="0" width="600" height="80" fill="%230F172A"/><text x="300" y="38" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="bold" fill="%23ffffff">MYOB/ABSS Accounting Software</text><text x="300" y="62" text-anchor="middle" font-family="sans-serif" font-size="13" fill="%2394A3B8">စနစ်တကျ အသုံးပြုနည်းနှင့် ပြုပြင်ထိန်းသိမ်းခြင်းဆိုင်ရာ လမ်းညွှန်ချက်</text><rect x="30" y="105" width="540" height="195" rx="8" fill="%23ffffff" stroke="%233B82F6" stroke-width="2"/><text x="50" y="135" font-family="sans-serif" font-size="15" font-weight="bold" fill="%231E3A8A">MYOB စနစ်တကျ အသုံးပြုရန် Standard နည်းလမ်းများ</text><text x="50" y="165" font-family="sans-serif" font-size="12" fill="%23059669">✔ ၃ ရက်လျှင် ၁ ကြိမ် Backup ပြုလုပ်ပါ</text><text x="50" y="185" font-family="sans-serif" font-size="11" fill="%23475569">- Data ဆုံးရှုံးမှု မရှိစေရန် ပုံမှန် Backup ဆွဲပေးရန် လိုအပ်ပါသည်။</text><text x="50" y="215" font-family="sans-serif" font-size="12" fill="%23059669">✔ ၁ လလျှင် ၁ ကြိမ် Optimise &amp; Verification ပြုလုပ်ပါ</text><text x="50" y="235" font-family="sans-serif" font-size="11" fill="%23475569">- Software အတွင်း Database Structure ကျန်းမာစေရန် လစဉ် ဆောင်ရွက်ရပါမည်။</text><text x="50" y="265" font-family="sans-serif" font-size="12" fill="%23059669">✔ စနစ်တကျ Exit လုပ်ပြီးမှ Cloud ပိတ်ပါ</text><text x="50" y="285" font-family="sans-serif" font-size="11" fill="%23475569">- Menu Bar &gt; File &gt; Exit မှတစ်ဆင့် ထွက်ပြီးမှသာ Cloud ပိတ်ရပါမည်။</text><rect x="30" y="320" width="540" height="150" rx="8" fill="%23ffffff" stroke="%23EF4444" stroke-width="2"/><text x="50" y="350" font-family="sans-serif" font-size="15" font-weight="bold" fill="%23991B1B">လက်ရှိ ဖြစ်ပေါ်နေသော ပြဿနာ၏ ပင်မအကြောင်းအရင်း</text><text x="50" y="380" font-family="sans-serif" font-size="12" fill="%23059669">✔ Software မှ စနစ်တကျ မထွက်ခြင်း</text><text x="50" y="400" font-family="sans-serif" font-size="11" fill="%23475569">- Exit မှ မထွက်ဘဲ Cloud ကို တိုက်ရိုက်ပိတ်သဖြင့် Database Corrupt ဖြစ်ပေါ်လာခဲ့ပါသည်။</text><text x="50" y="430" font-family="sans-serif" font-size="12" fill="%23059669">✔ Data File စနစ်တကျ ပျက်စီးသွားခြင်း</text><text x="50" y="450" font-family="sans-serif" font-size="11" fill="%23475569">- Corrupt မကြာခဏ ဖြစ်ပွားရာမှ Database File တစ်ခုလုံး ပြင်းထန်စွာ ထိခိုက်သွားခြင်း။</text><rect x="30" y="490" width="540" height="210" rx="8" fill="%23ffffff" stroke="%23E2E8F0" stroke-width="2"/><text x="50" y="520" font-family="sans-serif" font-size="15" font-weight="bold" fill="%231E293B">Database ပြုပြင်ထိန်းသိမ်းခြင်းဆိုင်ရာ ရွေးချယ်စရာများ</text><text x="50" y="550" font-family="sans-serif" font-size="12" fill="%23059669">✔ Malaysia / Singapore တွင် ပြုပြင်ခြင်း</text><text x="50" y="570" font-family="sans-serif" font-size="11" fill="%23475569">- ကုန်ကျစရိတ် သက်သာနိုင်သော်လည်း Data စုံလင်စွာ မပါလာနိုင်ဘဲ ပြန်လည် ပျက်စီးနိုင်ခြေ များပါသည်။</text><text x="50" y="605" font-family="sans-serif" font-size="12" fill="%23059669">✔ Australia (MYOB Creator) တွင် ပြုပြင်ခြင်း</text><text x="50" y="625" font-family="sans-serif" font-size="11" fill="%23475569">- Australia HQ သို့ ပို့ဆောင် ပြုပြင်ခြင်းသည်သာ Data များ စနစ်တကျ ပြန်လည်ရရှိပြီး ၁၀၀% အဆင်ပြေစေပါသည်။</text><rect x="50" y="650" width="500" height="35" rx="4" fill="%23FEF9C3" stroke="%23FDE047"/><text x="60" y="672" font-family="sans-serif" font-size="11" fill="%23854D0E">* Database ပျက်စီးပါက မည်သည့် Provider မှ Optimise လုပ်ပေးရုံမှလွဲ၍ အခြားမပြင်နိုင်ပါ။</text><text x="50" y="735" font-family="sans-serif" font-size="14" font-weight="bold" fill="%230F172A">ရေရှည် ကာကွယ်ပေးနိုင်မည့် RDPNight Solution</text></svg>',
+    ocrText: `MYOB/ABSS Accounting Software
+စနစ်တကျ အသုံးပြုနည်းနှင့် ပြုပြင်ထိန်းသိမ်းခြင်းဆိုင်ရာ လမ်းညွှန်ချက်
+
+MYOB စနစ်တကျ အသုံးပြုရန် Standard နည်းလမ်းများ
+✔ ၃ ရက်လျှင် ၁ ကြိမ် Backup ပြုလုပ်ပါ – Data ဆုံးရှုံးမှု မရှိစေရန် ပုံမှန် Backup ဆွဲပေးရန် လိုအပ်ပါသည်။
+✔ ၁ လလျှင် ၁ ကြိမ် Optimise & Verification ပြုလုပ်ပါ – Software အတွင်း Database Structure ကျန်းမာစေရန် လစဉ် ဆောင်ရွက်ရပါမည်။
+✔ စနစ်တကျ Exit လုပ်ပြီးမှ Cloud ပိတ်ပါ – Software အသုံးပြုပြီးပါက Menu Bar > File > Exit မှတစ်ဆင့် စနစ်တကျ ထွက်ပြီးမှသာ Cloud Application ကို ပိတ်ရပါမည်။
+မှတ်ချက် - Cloud Services အသုံးပြုနေသမျှ ကာလပတ်လုံး Optimise & Verification ကို Provider မှ လုပ်ဆောင်ပေးပါသည်။
+
+လက်ရှိ ဖြစ်ပေါ်နေသော ပြဿနာ၏ ပင်မအကြောင်းအရင်း
+✔ Software မှ စနစ်တကျ မထွက်ခြင်း: Exit မှ မထွက်ဘဲ Cloud ကို တိုက်ရိုက်ပိတ်မိသည့်အတွက် MYOB Database Corrupt နေ့တိုင်း ဖြစ်ပေါ်လာခဲ့ပါသည်။
+✔ Data File စနစ်တကျ ပျက်စီးသွားခြင်း: Corrupt မကြာခဏ ဖြစ်ပွားရာမှ ကြာလာသည်နှင့်အမျှ Database File တစ်ခုလုံး ပြင်းထန်စွာ ထိခိုက်သွားသည့် အခြေအနေသို့ ရောက်ရှိသွားခြင်းဖြစ်ပါသည်။
+
+Database ပြုပြင်ထိန်းသိမ်းခြင်းဆိုင်ရာ ရွေးချယ်စရာများ
+✔ Malaysia / Singapore တွင် ပြုပြင်ခြင်း: ကုန်ကျစရိတ် သက်သာနိုင်သော်လည်း Data များ စုံလင်စွာ မပါလာနိုင်ခြင်းနှင့် စနစ်တကျ ပြုပြင်ခြင်း မဟုတ်သည့်အတွက် ယာယီသာ ခံပြီး ပြန်လည် ပျက်စီးနိုင်ခြေ များပါသည်။
+✔ Australia (MYOB Creator) တွင် ပြုပြင်ခြင်း: MYOB ကို စတင်ဖန်တီးခဲ့သည့် Australia HQ သို့ ပို့ဆောင် ပြုပြင်ခြင်းသည်သာ Data များ စနစ်တကျ ပြန်လည်ရရှိပြီး ၁၀၀% အဆင်ပြေစေမည့် နည်းလမ်းဖြစ်ပါသည်။
+* ထိုသို့ Database ပျက်စီးသွားပါက မည်သည့် Provider မှ Optimise လုပ်ပေးရုံမှလွဲ၍ အခြားပြင်ဆင်၍ မရနိုင်ပါ။
+
+ရေရှည် ကာကွယ်ပေးနိုင်မည့် RDPNight Solution`,
+    tableData: [
+      ['ကဏ္ဍ / အပိုင်း (Section)', 'အကြောင်းအရာ (Topic / Point)', 'အသေးစိတ် ရှင်းလင်းချက် (Details / Action)'],
+      ['MYOB စနစ်တကျ အသုံးပြုရန် Standard နည်းလမ်းများ', '၃ ရက်လျှင် ၁ ကြိမ် Backup ပြုလုပ်ပါ', 'Data ဆုံးရှုံးမှု မရှိစေရန် ပုံမှန် Backup ဆွဲပေးရန် လိုအပ်ပါသည်။'],
+      ['MYOB စနစ်တကျ အသုံးပြုရန် Standard နည်းလမ်းများ', '၁ လလျှင် ၁ ကြိမ် Optimise & Verification ပြုလုပ်ပါ', 'Software အတွင်း Database Structure ကျန်းမာစေရန် လစဉ် ဆောင်ရွက်ရပါမည်။'],
+      ['MYOB စနစ်တကျ အသုံးပြုရန် Standard နည်းလမ်းများ', 'စနစ်တကျ Exit လုပ်ပြီးမှ Cloud ပိတ်ပါ', 'Software အသုံးပြုပြီးပါက Menu Bar > File > Exit မှတစ်ဆင့် စနစ်တကျ ထွက်ပြီးမှသာ Cloud Application ကို ပိတ်ရပါမည်။'],
+      ['Standard နည်းလမ်းများ - မှတ်ချက်', 'Cloud Services Provider တာဝန်', 'Cloud Services အသုံးပြုနေသမျှ ကာလပတ်လုံး Optimise & Verification ကို Provider မှ လုပ်ဆောင်ပေးပါသည်။'],
+      ['လက်ရှိ ဖြစ်ပေါ်နေသော ပြဿနာ၏ ပင်မအကြောင်းအရင်း', 'Software မှ စနစ်တကျ မထွက်ခြင်း', 'Exit မှ မထွက်ဘဲ Cloud ကို တိုက်ရိုက်ပိတ်မိသည့်အတွက် MYOB Database Corrupt နေ့တိုင်း ဖြစ်ပေါ်လာခဲ့ပါသည်။'],
+      ['လက်ရှိ ဖြစ်ပေါ်နေသော ပြဿနာ၏ ပင်မအကြောင်းအရင်း', 'Data File စနစ်တကျ ပျက်စီးသွားခြင်း', 'Corrupt မကြာခဏ ဖြစ်ပွားရာမှ ကြာလာသည်နှင့်အမျှ Database File တစ်ခုလုံး ပြင်းထန်စွာ ထိခိုက်သွားသည့် အခြေအနေသို့ ရောက်ရှိသွားခြင်းဖြစ်ပါသည်။'],
+      ['Database ပြုပြင်ထိန်းသိမ်းခြင်းဆိုင်ရာ ရွေးချယ်စရာများ', 'Malaysia / Singapore တွင် ပြုပြင်ခြင်း', 'ကုန်ကျစရိတ် သက်သာနိုင်သော်လည်း Data များ စုံလင်စွာ မပါလာနိုင်ခြင်းနှင့် စနစ်တကျ ပြုပြင်ခြင်း မဟုတ်သည့်အတွက် ယာယီသာ ခံပြီး ပြန်လည် ပျက်စီးနိုင်ခြေ များပါသည်။'],
+      ['Database ပြုပြင်ထိန်းသိမ်းခြင်းဆိုင်ရာ ရွေးချယ်စရာများ', 'Australia (MYOB Creator) တွင် ပြုပြင်ခြင်း', 'MYOB ကို စတင်ဖန်တီးခဲ့သည့် Australia HQ သို့ ပို့ဆောင် ပြုပြင်ခြင်းသည်သာ Data များ စနစ်တကျ ပြန်လည်ရရှိပြီး ၁၀၀% အဆင်ပြေစေမည့် နည်းလမ်းဖြစ်ပါသည်။'],
+      ['Database ပြုပြင်ထိန်းသိမ်းခြင်းဆိုင်ရာ ရွေးချယ်စရာများ', 'Provider ကန့်သတ်ချက် သတိပေးချက်', 'ထိုသို့ Database ပျက်စီးသွားပါက မည်သည့် Provider မှ Optimise လုပ်ပေးရုံမှလွဲ၍ အခြားပြင်ဆင်၍ မရနိုင်ပါ။'],
+      ['ရေရှည် ကာကွယ်ရေး', 'RDPNight Solution', 'ရေရှည် ကာကွယ်ပေးနိုင်မည့် RDPNight Solution']
+    ]
+  },
   {
     id: 'sample-invoice',
     name: 'TechSupply_Invoice_#4829.png',

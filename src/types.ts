@@ -60,4 +60,28 @@ export interface DriveAccount {
 
 export type ActiveTab = 'scan' | 'excel' | 'voice' | 'storage' | 'bsetup';
 export type FilterCategory = 'all' | 'pdf' | 'excel' | 'audio';
+export type ExportLayoutMode = 'framed' | 'text' | 'matrix';
+
+export interface DocumentSectionItem {
+  text: string;
+  subtext?: string;
+  isCheck?: boolean;
+}
+
+export interface DocumentSectionBlock {
+  type: 'standard_box' | 'danger_box' | 'warning_box' | 'table' | 'paragraph' | 'notes';
+  title: string;
+  colorTheme?: 'emerald' | 'blue' | 'red' | 'amber' | 'slate' | 'yellow';
+  items?: DocumentSectionItem[];
+  content?: string;
+  table?: string[][];
+}
+
+export interface FormattedLayoutResult {
+  title: string;
+  subtitle?: string;
+  formattedText: string;
+  sections: DocumentSectionBlock[];
+  table?: string[][];
+}
 

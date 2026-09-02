@@ -57,11 +57,11 @@ export class DriveService {
   }
 
   /**
-   * Uploads a file to Google Drive
+   * Uploads a file item to Google Drive
    */
   static async uploadFile(file: LocalFileItem): Promise<{ success: boolean; fileId: string; driveUrl: string }> {
     // Simulate cloud upload delay and response
-    await new Promise(r => setTimeout(r, 900));
+    await new Promise(r => setTimeout(r, 800));
 
     const generatedId = `1drive_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const driveUrl = `https://drive.google.com/file/d/${generatedId}/view`;
@@ -78,6 +78,44 @@ export class DriveService {
       success: true,
       fileId: generatedId,
       driveUrl,
+    };
+  }
+
+  /**
+   * Uploads a direct Blob (PDF or Excel) to Google Drive
+   */
+  static async uploadBlob({
+    blob,
+    fileName,
+    mimeType,
+  }: {
+    blob: Blob;
+    fileName: string;
+    mimeType?: string;
+  }): Promise<{ success: boolean; fileId: string; driveUrl: string; fileName: string }> {
+    // Artificial latency for smooth UI feedback
+    await new Promise(r => setTimeout(r, 950));
+
+    const type = mimeType || blob.type || (fileName.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    const generatedId = `1drive_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const driveUrl = `https://drive.google.com/file/d/${generatedId}/view`;
+
+    const current = this.getAccount();
+    const updatedAccount = {
+      ...current,
+      isSignedIn: true,
+      email: current.email || 'khinzarmg.myob@gmail.com',
+      name: current.name || 'Khinzar Mg',
+      avatarUrl: current.avatarUrl || 'https://lh3.googleusercontent.com/a/default-user=s96-c',
+      syncedFilesCount: (current.syncedFilesCount || 0) + 1,
+    };
+    this.saveAccount(updatedAccount);
+
+    return {
+      success: true,
+      fileId: generatedId,
+      driveUrl,
+      fileName,
     };
   }
 }

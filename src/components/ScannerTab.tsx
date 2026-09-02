@@ -1,10 +1,40 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Camera, Image as ImageIcon, Copy, Check, FileText, Table, Loader2, Sparkles, X, Settings, Key, RefreshCw, CheckCircle2 } from 'lucide-react';
+import {
+  Camera,
+  Image as ImageIcon,
+  Copy,
+  Check,
+  FileText,
+  Table,
+  Loader2,
+  Sparkles,
+  X,
+  Key,
+  RefreshCw,
+  CheckCircle2,
+  Columns,
+  Layout,
+  Wand2,
+  ZoomIn,
+  ZoomOut,
+  Download,
+  ArrowRight,
+  Eye,
+  Cloud,
+  Layers,
+  AlignLeft,
+  Grid,
+  ChevronDown
+} from 'lucide-react';
 import { SAMPLE_DOCUMENTS, SampleDoc, OcrService } from '../services/ocrService';
+import { AutoFramedDocumentView } from './AutoFramedDocumentView';
+import { DocumentSectionBlock, ExportLayoutMode } from '../types';
 
 interface ScannerTabProps {
   scannedImage: string | null;
   extractedText: string;
+  tableRows?: string[][];
+  onUpdateTableRows?: (rows: string[][]) => void;
   isProcessingOcr: boolean;
   ocrProgress: { progress: number; status: string };
   selectedEngine: 'gemini' | 'spatial';
@@ -15,13 +45,18 @@ interface ScannerTabProps {
   onImageSelected: (file: File | string) => void;
   onTextChange: (text: string) => void;
   onSaveAsPdf: () => void;
+  onExportExcelDirectly?: () => void;
   onGoToExcel: () => void;
   onClearScan: () => void;
+  onOpenExportModal?: (defaultFormat?: 'pdf' | 'excel' | 'csv', layoutMode?: ExportLayoutMode) => void;
+  onQuickUploadToDrive?: () => void;
 }
 
 export const ScannerTab: React.FC<ScannerTabProps> = ({
   scannedImage,
   extractedText,
+  tableRows = [],
+  onUpdateTableRows,
   isProcessingOcr,
   ocrProgress,
   selectedEngine,
@@ -32,8 +67,11 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
   onImageSelected,
   onTextChange,
   onSaveAsPdf,
+  onExportExcelDirectly,
   onGoToExcel,
   onClearScan,
+  onOpenExportModal,
+  onQuickUploadToDrive,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [copied, setCopied] = useState(false);
@@ -43,6 +81,24 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
   const [apiKeySavedSuccess, setApiKeySavedSuccess] = useState(false);
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const [viewMode, setViewMode] = useState<'framed' | 'text' | 'table' | 'split'>('framed');
+  const [isAutoFormatting, setIsAutoFormatting] = useState(false);
+  const [isImageZoomed, setIsImageZoomed] = useState(false);
+  const [formattedDoc, setFormattedDoc] = useState<{
+    title: string;
+    subtitle: string;
+    sections: DocumentSectionBlock[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (extractedText) {
+      const parsed = OcrService.parseTextToSections(extractedText, tableRows);
+      setFormattedDoc(parsed);
+    } else {
+      setFormattedDoc(null);
+    }
+  }, [extractedText, tableRows]);
 
   useEffect(() => {
     setApiKeyInput(OcrService.getStoredApiKey());
@@ -100,26 +156,58 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
     }
   };
 
+  const handleAutoFormatAndAdjust = async () => {
+    if (!extractedText) return;
+    setIsAutoFormatting(true);
+    try {
+      const res = await OcrService.autoFormatAndAlignLayout(extractedText, tableRows);
+      if (res.formattedText && res.formattedText !== extractedText) {
+        onTextChange(res.formattedText);
+      }
+      if (res.table && onUpdateTableRows) {
+        onUpdateTableRows(res.table);
+      }
+      setFormattedDoc({
+        title: res.title,
+        subtitle: res.subtitle || '',
+        sections: res.sections,
+      });
+      setViewMode('framed');
+    } catch (err) {
+      console.error('Auto format error:', err);
+    } finally {
+      setIsAutoFormatting(false);
+    }
+  };
+
   return (
     <div className="space-y-4 max-w-4xl mx-auto pb-8">
-      {/* Engine Selection Toggle Card */}
+      {/* Engine Selection & API Key Configuration Bar */}
       <div className="bg-white/95 dark:bg-dark-card/95 backdrop-blur-xs rounded-xl p-3 border border-emerald-100 dark:border-dark-border shadow-xs">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs font-bold text-slate-800 dark:text-emerald-200 flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            Table Extraction Engine:
+            AI Document & Table Engine:
           </span>
           <div className="flex items-center gap-2">
-            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-              {selectedEngine === 'gemini' ? '✨ ScanToExcel-grade precision' : '⚡ 100% Offline / Client-side'}
-            </span>
+            {OcrService.getStoredApiKey() ? (
+              <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                Connected
+              </span>
+            ) : (
+              <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                {selectedEngine === 'gemini' ? '✨ AI Smart Vision (Gemini Flash)' : '⚡ 100% Offline / Client-side'}
+              </span>
+            )}
             <button
               type="button"
               onClick={() => setIsApiKeyModalOpen(true)}
-              className="p-1 rounded-md hover:bg-emerald-50 dark:hover:bg-emerald-950/60 text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
-              title="Configure Gemini API Key"
+              className="flex items-center gap-1 px-2 py-1 rounded-md bg-slate-100 dark:bg-dark-elevated hover:bg-emerald-50 dark:hover:bg-emerald-950/60 text-slate-600 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 border border-slate-200 dark:border-dark-border text-xs transition-colors"
+              title="Configure Google Gemini API Key"
             >
-              <Settings className="w-3.5 h-3.5" />
+              <Key className="w-3.5 h-3.5" />
+              <span className="text-[11px] font-medium">{OcrService.getStoredApiKey() ? 'API Key' : 'Setup Key'}</span>
             </button>
           </div>
         </div>
@@ -138,7 +226,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
               <span>AI Smart Vision</span>
             </div>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">Gemini 3.7 Flash (100% Table Match)</span>
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">Gemini Flash (100% Table Match)</span>
           </button>
 
           <button
@@ -213,32 +301,171 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
         </div>
       </div>
 
-      {/* Image Preview Container (if image selected) */}
+      {/* 100% RAW PHOTO LIVE PREVIEW VIEWPORT (Main Focus) */}
       {scannedImage && (
-        <div className="relative bg-slate-950 dark:bg-black rounded-xl overflow-hidden shadow-inner border border-emerald-900/30 dark:border-dark-border">
-          <div className="h-56 sm:h-64 flex items-center justify-center p-3">
+        <div className="bg-white dark:bg-dark-card rounded-xl border border-emerald-200 dark:border-dark-border shadow-sm overflow-hidden transition-all">
+          <div className="px-4 py-2.5 bg-emerald-50/60 dark:bg-dark-surface/60 border-b border-emerald-100 dark:border-dark-border flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-emerald-100 flex items-center gap-1.5">
+                <ImageIcon className="w-4 h-4 text-emerald-600" />
+                100% Raw Scanned Document Photo
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800">
+                Original Capture
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setIsImageZoomed(prev => !prev)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-white dark:bg-dark-elevated hover:bg-slate-100 dark:hover:bg-dark-bg text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-dark-border shadow-2xs transition-colors"
+                title="Toggle Zoom Fit"
+              >
+                {isImageZoomed ? <ZoomOut className="w-3.5 h-3.5" /> : <ZoomIn className="w-3.5 h-3.5" />}
+                <span className="text-[11px]">{isImageZoomed ? 'Fit Height' : 'Full Zoom'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleReScanCurrent(selectedEngine)}
+                title="Re-run AI OCR on current image"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shadow-2xs"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span className="text-[11px]">Re-scan</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onClearScan}
+                title="Remove Scan"
+                className="p-1 rounded-md hover:bg-rose-100 dark:hover:bg-rose-950/60 text-slate-400 hover:text-rose-600 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className={`relative bg-slate-950 dark:bg-black p-3 flex items-center justify-center transition-all ${
+            isImageZoomed ? 'min-h-[500px]' : 'max-h-[320px] min-h-[220px]'
+          }`}>
             <img
               src={scannedImage}
-              alt="Scanned Document"
-              className="max-h-full max-w-full object-contain rounded-lg shadow-md"
+              alt="100% Raw Scanned Document"
+              className={`max-w-full object-contain rounded-lg shadow-md transition-all ${
+                isImageZoomed ? 'h-auto max-h-[700px]' : 'max-h-[300px]'
+              }`}
             />
           </div>
-          <div className="absolute top-2 right-2 flex items-center gap-1.5">
-            <button
-              onClick={() => handleReScanCurrent(selectedEngine)}
-              title="Re-run OCR on current image"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-700 text-white text-xs font-semibold backdrop-blur-xs transition-colors shadow-sm"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Re-scan</span>
-            </button>
-            <button
-              onClick={onClearScan}
-              title="Remove Scan"
-              className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-white backdrop-blur-xs transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
+
+          {/* DEDICATED 1-CLICK INSTANT CONVERSION ACTION HUB (With Frame Cards / Text Flow / Matrix & Drive Upload) */}
+          <div className="p-3.5 bg-gradient-to-r from-emerald-50/80 via-teal-50/50 to-slate-50/80 dark:from-dark-surface dark:via-dark-card dark:to-dark-surface border-t border-emerald-100 dark:border-dark-border">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-slate-800 dark:text-emerald-200 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                Save & Drive Options (Frame Cards / Text Flow / Matrix):
+              </span>
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                100% 1:1 Matching
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+              {/* Convert to PDF Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                  if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
+                  else onSaveAsPdf();
+                }}
+                disabled={isProcessingOcr || !extractedText}
+                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 hover:from-rose-600 hover:to-red-700 text-white font-semibold text-xs shadow-md shadow-red-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-white/20">
+                    <FileText className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-bold text-xs">Save as PDF</div>
+                    <div className="text-[10px] text-red-100">
+                      {viewMode === 'text' ? 'Text Flow' : viewMode === 'table' ? 'Matrix' : 'Frame Cards'}
+                    </div>
+                  </div>
+                </div>
+                <Download className="w-4 h-4" />
+              </button>
+
+              {/* Convert to Excel Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                  if (onOpenExportModal) onOpenExportModal('excel', currentLayout);
+                  else if (onExportExcelDirectly) onExportExcelDirectly();
+                  else onGoToExcel();
+                }}
+                disabled={isProcessingOcr || (!extractedText && tableRows.length === 0)}
+                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-semibold text-xs shadow-md shadow-emerald-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-white/20">
+                    <Table className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-bold text-xs">Save as Excel</div>
+                    <div className="text-[10px] text-emerald-100">
+                      {viewMode === 'text' ? 'Text Flow' : viewMode === 'table' ? 'Matrix' : 'Framed SOP'}
+                    </div>
+                  </div>
+                </div>
+                <Download className="w-4 h-4" />
+              </button>
+
+              {/* Upload to Google Drive Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                  if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
+                  else if (onQuickUploadToDrive) onQuickUploadToDrive();
+                }}
+                disabled={isProcessingOcr || !extractedText}
+                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold text-xs shadow-md shadow-blue-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-white/20">
+                    <Cloud className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-bold text-xs">Upload to Drive</div>
+                    <div className="text-[10px] text-blue-100">Direct Cloud Sync</div>
+                  </div>
+                </div>
+                <Sparkles className="w-4 h-4 text-blue-200" />
+              </button>
+
+              {/* Dual Side-by-Side Review Button */}
+              <button
+                type="button"
+                onClick={() => setViewMode('split')}
+                disabled={isProcessingOcr || !extractedText}
+                className="flex items-center justify-between p-3 rounded-xl bg-white dark:bg-dark-elevated hover:bg-emerald-50 dark:hover:bg-dark-border text-slate-800 dark:text-emerald-100 font-semibold text-xs border border-emerald-200 dark:border-dark-border shadow-2xs transition-all active:scale-[0.98] disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-600">
+                    <Columns className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-bold text-xs">Side-by-Side</div>
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400">1:1 Dual Review</div>
+                  </div>
+                </div>
+                <Eye className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -267,15 +494,15 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
 
       {/* OCR Results Section */}
       <div className="bg-white/95 dark:bg-dark-card/95 backdrop-blur-xs rounded-xl border border-emerald-100 dark:border-dark-border shadow-xs overflow-hidden transition-colors">
-        {/* Header */}
-        <div className="px-4 py-3 border-b border-emerald-100 dark:border-dark-border flex items-center justify-between bg-emerald-50/40 dark:bg-dark-surface/50">
+        {/* Header with View Switchers */}
+        <div className="px-4 py-3 border-b border-emerald-100 dark:border-dark-border flex items-center justify-between flex-wrap gap-2 bg-emerald-50/40 dark:bg-dark-surface/50">
           <div className="flex items-center space-x-2">
             <FileText className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             <h2 className="font-bold text-slate-900 dark:text-emerald-100 text-sm sm:text-base">
-              Extracted OCR Text
+              Extracted OCR Structure & Layout
             </h2>
             {lastEngineUsed && (
-              <span className={`ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                 lastEngineUsed.includes('AI')
                   ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
                   : 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800'
@@ -286,7 +513,82 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
           </div>
 
           {extractedText && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {/* AI Auto-Format & Align Lines/Columns Button */}
+              <button
+                onClick={handleAutoFormatAndAdjust}
+                disabled={isAutoFormatting}
+                title="AI Auto-Frame, Align Lines and Structure Columns"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 hover:bg-emerald-200 dark:hover:bg-emerald-900 transition-all disabled:opacity-50"
+              >
+                {isAutoFormatting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                ) : (
+                  <Wand2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                )}
+                <span>AI Auto-Frame & Align</span>
+              </button>
+
+              {/* View Switcher Pills */}
+              <div className="inline-flex rounded-lg p-0.5 bg-slate-100 dark:bg-dark-bg border border-slate-300 dark:border-dark-border text-xs">
+                <button
+                  onClick={() => setViewMode('framed')}
+                  className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
+                    viewMode === 'framed'
+                      ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                  title="Auto-Framed Cards & Structure"
+                >
+                  <Layout className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Framed Cards</span>
+                </button>
+
+                <button
+                  onClick={() => setViewMode('text')}
+                  className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
+                    viewMode === 'text'
+                      ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                  title="Raw OCR Text Buffer"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Text Flow</span>
+                </button>
+
+                {tableRows && tableRows.length > 0 && (
+                  <button
+                    onClick={() => setViewMode('table')}
+                    className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
+                      viewMode === 'table'
+                        ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                    title="2D Table Matrix"
+                  >
+                    <Table className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Matrix</span>
+                  </button>
+                )}
+
+                {scannedImage && (
+                  <button
+                    onClick={() => setViewMode('split')}
+                    className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
+                      viewMode === 'split'
+                        ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                    title="Dual Side-by-Side View"
+                  >
+                    <Columns className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Dual</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Copy Text Button */}
               <button
                 onClick={handleCopy}
                 className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-900 transition-colors"
@@ -300,7 +602,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 ) : (
                   <>
                     <Copy className="w-3.5 h-3.5" />
-                    <span>Copy Text</span>
+                    <span className="hidden sm:inline">Copy</span>
                   </>
                 )}
               </button>
@@ -317,27 +619,111 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 {ocrProgress.status || 'Recognizing text with OCR engine...'}
               </p>
               {ocrProgress.progress > 0 && (
-                <div className="w-48 bg-emerald-100 dark:bg-dark-border rounded-full h-1.5 mt-3 overflow-hidden">
+                <div className="w-56 bg-emerald-100 dark:bg-dark-border rounded-full h-2 mt-3 overflow-hidden">
                   <div
                     className="bg-emerald-500 h-full transition-all duration-200"
                     style={{ width: `${Math.round(ocrProgress.progress * 100)}%` }}
                   />
                 </div>
               )}
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+                Formatting 1:1 PDF & Excel structure with Myanmar Unicode...
+              </p>
             </div>
           ) : extractedText ? (
             <div className="space-y-3">
-              <textarea
-                value={extractedText}
-                onChange={e => onTextChange(e.target.value)}
-                rows={8}
-                className="w-full font-mono text-xs sm:text-sm p-3 rounded-lg border border-emerald-200 dark:border-dark-border bg-emerald-50/20 dark:bg-dark-bg text-slate-900 dark:text-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-y leading-relaxed"
-                placeholder="OCR recognized text will appear here..."
-              />
-              <div className="flex items-center justify-between text-[11px] text-emerald-800/80 dark:text-emerald-400/80 px-1">
-                <span>{extractedText.split('\n').filter(l => l.trim()).length} lines detected</span>
-                <span>Editable text buffer</span>
-              </div>
+              {/* Dual Side-by-Side Split View */}
+              {viewMode === 'split' && scannedImage && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Original Scanned Document (100% Raw):</span>
+                    </div>
+                    <div className="bg-slate-900 rounded-xl overflow-hidden p-2 flex items-center justify-center min-h-[350px] border border-slate-800">
+                      <img
+                        src={scannedImage}
+                        alt="Original Document"
+                        className="max-h-[480px] w-auto object-contain rounded-lg"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>AI Framed OCR Result (1:1 Layout):</span>
+                    </div>
+                    <div className="max-h-[500px] overflow-y-auto pr-1">
+                      {formattedDoc && (
+                        <AutoFramedDocumentView
+                          title={formattedDoc.title}
+                          subtitle={formattedDoc.subtitle}
+                          sections={formattedDoc.sections}
+                          tableData={tableRows}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Framed Cards View */}
+              {viewMode === 'framed' && formattedDoc && (
+                <AutoFramedDocumentView
+                  title={formattedDoc.title}
+                  subtitle={formattedDoc.subtitle}
+                  sections={formattedDoc.sections}
+                  tableData={tableRows}
+                />
+              )}
+
+              {/* Raw Text Editable View */}
+              {viewMode === 'text' && (
+                <div className="space-y-2">
+                  <textarea
+                    value={extractedText}
+                    onChange={e => onTextChange(e.target.value)}
+                    rows={12}
+                    className="w-full font-mono text-xs sm:text-sm p-3 rounded-lg border border-emerald-200 dark:border-dark-border bg-emerald-50/20 dark:bg-dark-bg text-slate-900 dark:text-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-y leading-relaxed"
+                    placeholder="OCR recognized text will appear here..."
+                  />
+                  <div className="flex items-center justify-between text-[11px] text-emerald-800/80 dark:text-emerald-400/80 px-1">
+                    <span>{extractedText.split('\n').filter(l => l.trim()).length} lines detected</span>
+                    <span>1:1 Editable Myanmar Unicode & English buffer</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 2D Table Matrix View */}
+              {viewMode === 'table' && tableRows && tableRows.length > 0 && (
+                <div className="rounded-xl border border-emerald-200 dark:border-dark-border bg-white dark:bg-dark-card overflow-hidden shadow-xs">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <tbody>
+                        {tableRows.map((row, rIdx) => (
+                          <tr
+                            key={rIdx}
+                            className={
+                              rIdx === 0
+                                ? 'bg-emerald-600 text-white font-semibold'
+                                : rIdx % 2 === 1
+                                ? 'bg-emerald-50/40 dark:bg-emerald-950/30 text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-dark-border'
+                                : 'bg-white dark:bg-dark-card text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-dark-border'
+                            }
+                          >
+                            {row.map((cell, cIdx) => (
+                              <td key={cIdx} className="px-3 py-2 border-r border-slate-200/50 dark:border-dark-border last:border-r-0">
+                                {cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="py-12 flex flex-col items-center justify-center text-center px-4">
@@ -345,32 +731,77 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 <FileText className="w-6 h-6" />
               </div>
               <p className="text-sm font-medium text-slate-700 dark:text-slate-300 max-w-sm">
-                Scan a document via camera or choose an image to perform OCR extraction.
+                Scan a document via camera or upload an image to perform instant OCR extraction.
               </p>
               <p className="text-xs text-emerald-700 dark:text-emerald-400/70 mt-1">
-                Receipts, invoices, tables, and physical forms are automatically parsed.
+                Receipts, invoices, tables, and physical forms are automatically converted to 1:1 PDF & Excel.
               </p>
             </div>
           )}
 
-          {/* Dual Action Buttons: Save as PDF & To Excel */}
+          {/* Bottom Conversion Action Footer */}
           {extractedText && (
-            <div className="mt-4 pt-3 border-t border-emerald-100 dark:border-dark-border grid grid-cols-2 gap-3">
-              <button
-                onClick={onSaveAsPdf}
-                className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 hover:from-rose-600 hover:to-red-700 text-white font-semibold text-xs sm:text-sm shadow-sm shadow-red-500/20 transition-all active:scale-[0.98]"
-              >
-                <FileText className="w-4 h-4" />
-                <span>Save as PDF</span>
-              </button>
+            <div className="mt-4 pt-3 border-t border-emerald-100 dark:border-dark-border flex items-center justify-between flex-wrap gap-2">
+              <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                <span>Layout: </span>
+                <span className="font-bold text-emerald-700 dark:text-emerald-400">Frame Cards / Text Flow / Matrix</span>
+              </div>
 
-              <button
-                onClick={onGoToExcel}
-                className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-semibold text-xs sm:text-sm shadow-sm shadow-emerald-500/20 transition-all active:scale-[0.98]"
-              >
-                <Table className="w-4 h-4" />
-                <span>To Excel</span>
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Save as PDF */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                    if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
+                    else onSaveAsPdf();
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3.5 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 hover:from-rose-600 hover:to-red-700 text-white font-semibold text-xs shadow-sm shadow-red-500/20 transition-all active:scale-[0.98]"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Save as PDF</span>
+                </button>
+
+                {/* Export Excel */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                    if (onOpenExportModal) onOpenExportModal('excel', currentLayout);
+                    else if (onExportExcelDirectly) onExportExcelDirectly();
+                    else onGoToExcel();
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-semibold text-xs shadow-sm shadow-emerald-500/20 transition-all active:scale-[0.98]"
+                >
+                  <Table className="w-3.5 h-3.5" />
+                  <span>Save as Excel</span>
+                </button>
+
+                {/* Upload to Google Drive */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                    if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
+                    else if (onQuickUploadToDrive) onQuickUploadToDrive();
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold text-xs shadow-sm shadow-blue-500/20 transition-all active:scale-[0.98]"
+                >
+                  <Cloud className="w-3.5 h-3.5" />
+                  <span>Upload to Drive</span>
+                </button>
+
+                {/* Open in Interactive Excel Studio */}
+                <button
+                  type="button"
+                  onClick={onGoToExcel}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-slate-100 dark:bg-dark-elevated hover:bg-emerald-50 dark:hover:bg-dark-border text-slate-700 dark:text-slate-200 font-semibold text-xs border border-slate-200 dark:border-dark-border transition-all"
+                  title="Open in Interactive Excel Studio"
+                >
+                  <span>Studio</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-emerald-600" />
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -494,4 +925,3 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
     </div>
   );
 };
-
