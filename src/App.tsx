@@ -9,7 +9,7 @@ import {
   AlertCircle,
   X
 } from 'lucide-react';
-import { ActiveTab, DocumentItem, LocalFileItem, FilterCategory, DriveAccount, AppUser } from './types';
+import { ActiveTab, DocumentItem, LocalFileItem, FilterCategory, DriveAccount, AppUser, DocumentReconstruction, ExportLayoutMode } from './types';
 import { Navbar } from './components/Navbar';
 import { WaveBackground } from './components/WaveBackground';
 import { ScannerTab } from './components/ScannerTab';
@@ -78,6 +78,7 @@ export function App() {
     status: '',
   });
   const [tableRows, setTableRows] = useState<string[][]>([]);
+  const [documentReconstruction, setDocumentReconstruction] = useState<DocumentReconstruction | null>(null);
 
   // Local Storage & Documents
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
@@ -90,7 +91,7 @@ export function App() {
   // Modals
   const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
-  const [exportModalFormat, setExportModalFormat] = useState<'pdf' | 'excel' | 'csv'>('pdf');
+  const [exportModalFormat, setExportModalFormat] = useState<'pdf' | 'word' | 'excel' | 'csv'>('pdf');
   const [exportModalLayoutMode, setExportModalLayoutMode] = useState<ExportLayoutMode>('framed');
   const [readerModal, setReaderModal] = useState<{
     isOpen: boolean;
@@ -103,9 +104,13 @@ export function App() {
     file: null,
   });
 
-  const handleOpenExportModal = (format: 'pdf' | 'excel' | 'csv' = 'pdf', layoutMode: ExportLayoutMode = 'framed') => {
+  const handleOpenExportModal = (format: 'pdf' | 'word' | 'excel' | 'csv' = 'pdf', layoutMode?: ExportLayoutMode) => {
     setExportModalFormat(format);
-    setExportModalLayoutMode(layoutMode);
+    if (layoutMode) {
+      setExportModalLayoutMode(layoutMode);
+    } else if (documentReconstruction?.htmlContent) {
+      setExportModalLayoutMode('reconstructed');
+    }
     setIsExportModalOpen(true);
   };
 
@@ -117,6 +122,7 @@ export function App() {
     dataUrl?: string;
     driveSynced: boolean;
   }) => {
+    const isWord = newFile.extension === 'docx';
     const isPdf = newFile.extension === 'pdf';
     const isExcel = newFile.extension === 'xlsx';
     const isCsv = newFile.extension === 'csv';
@@ -129,11 +135,14 @@ export function App() {
       sizeBytes: newFile.blob.size,
       modifiedAt: new Date().toISOString(),
       isPdf,
+      isWord,
       isExcel,
       isCsv,
       isAudio: false,
       dataUrl: newFile.dataUrl,
       textContent: extractedText,
+      htmlContent: documentReconstruction?.htmlContent,
+      reconstruction: documentReconstruction || undefined,
       tableData: tableRows,
       driveSynced: newFile.driveSynced,
       userId: currentUser.id,
@@ -237,6 +246,7 @@ export function App() {
 
       let text = '';
       let table: string[][] = [];
+      let currentRecon: DocumentReconstruction | null = null;
 
       if (selectedEngine === 'gemini') {
         const geminiResult = await OcrService.recognizeImageWithGeminiVision(imageSource, (progress, status) => {
@@ -244,6 +254,26 @@ export function App() {
         });
         text = geminiResult.text;
         table = geminiResult.table;
+        if (geminiResult.reconstruction) {
+          currentRecon = geminiResult.reconstruction;
+          setDocumentReconstruction(geminiResult.reconstruction);
+        } else if (geminiResult.htmlContent) {
+          currentRecon = {
+            title,
+            subtitle: '',
+            documentType: 'general',
+            language: 'my',
+            orientation: 'portrait',
+            fullText: text,
+            htmlContent: geminiResult.htmlContent,
+            elements: geminiResult.elements || [],
+            tables: geminiResult.tables || [],
+            sections: geminiResult.sections || [],
+            confidence: 0.95,
+          };
+          setDocumentReconstruction(currentRecon);
+        }
+
         if (geminiResult.engine === 'gemini') {
           setLastEngineUsed('✨ AI Smart Vision (Gemini Flash)');
           setEngineWarning(null);
@@ -252,6 +282,7 @@ export function App() {
           setEngineWarning(geminiResult.error || 'Gemini Vision could not connect. Using local Spatial OCR.');
         }
       } else {
+        setDocumentReconstruction(null);
         const ocrResult = await OcrService.recognizeImageWithSpatialClustering(imageSource, (progress, status) => {
           setOcrProgress({ progress, status });
         });
@@ -271,6 +302,8 @@ export function App() {
           title,
           imagePath: imageSrc,
           extractedText: text,
+          htmlContent: currentRecon?.htmlContent,
+          reconstruction: currentRecon || undefined,
           createdAt: new Date().toISOString(),
           tableData: table,
           isSyncedToDrive: driveAccount.isSignedIn,
@@ -607,6 +640,8 @@ export function App() {
             extractedText={extractedText}
             tableRows={tableRows}
             onUpdateTableRows={setTableRows}
+            reconstruction={documentReconstruction}
+            onReconstructionChange={setDocumentReconstruction}
             isProcessingOcr={isProcessingOcr}
             ocrProgress={ocrProgress}
             selectedEngine={selectedEngine}
@@ -625,6 +660,7 @@ export function App() {
               setScannedImage(null);
               setExtractedText('');
               setTableRows([]);
+              setDocumentReconstruction(null);
               setLastEngineUsed('');
               setEngineWarning(null);
             }}
@@ -829,6 +865,8 @@ export function App() {
         title={currentDocTitle}
         imageSrc={scannedImage}
         extractedText={extractedText}
+        htmlContent={documentReconstruction?.htmlContent}
+        reconstruction={documentReconstruction || undefined}
         tableData={tableRows}
         driveAccount={driveAccount}
         initialFormat={exportModalFormat}

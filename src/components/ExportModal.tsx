@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   X,
   FileText,
+  FileEdit,
   Table,
   FileSpreadsheet,
   Download,
@@ -12,12 +13,14 @@ import {
   Layers,
   AlignLeft,
   Grid,
+  Columns,
   Check,
   ExternalLink,
   Loader2
 } from 'lucide-react';
-import { ExportLayoutMode, DriveAccount } from '../types';
+import { ExportLayoutMode, DriveAccount, DocumentReconstruction } from '../types';
 import { PdfService } from '../services/pdfService';
+import { WordExportService } from '../services/wordExportService';
 import { SpreadsheetService } from '../services/spreadsheetService';
 import { DriveService } from '../services/driveService';
 
@@ -28,8 +31,10 @@ interface ExportModalProps {
   imageSrc?: string | null;
   extractedText: string;
   tableData?: string[][];
+  htmlContent?: string;
+  reconstruction?: DocumentReconstruction;
   driveAccount: DriveAccount;
-  initialFormat?: 'pdf' | 'excel' | 'csv';
+  initialFormat?: 'pdf' | 'word' | 'excel' | 'csv';
   initialLayoutMode?: ExportLayoutMode;
   onFileSavedLocally?: (newFile: {
     id: string;
@@ -38,6 +43,7 @@ interface ExportModalProps {
     blob: Blob;
     dataUrl?: string;
     driveSynced: boolean;
+    htmlContent?: string;
   }) => void;
   onToast: (message: string, type?: 'success' | 'info' | 'error') => void;
 }
@@ -49,14 +55,20 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   imageSrc,
   extractedText,
   tableData = [],
+  htmlContent,
+  reconstruction,
   driveAccount,
   initialFormat = 'pdf',
   initialLayoutMode = 'framed',
   onFileSavedLocally,
   onToast,
 }) => {
-  const [format, setFormat] = useState<'pdf' | 'excel' | 'csv'>(initialFormat);
-  const [layoutMode, setLayoutMode] = useState<ExportLayoutMode>(initialLayoutMode);
+  const [format, setFormat] = useState<'pdf' | 'word' | 'excel' | 'csv'>(initialFormat);
+  const [layoutMode, setLayoutMode] = useState<ExportLayoutMode>(() => {
+    if (initialLayoutMode) return initialLayoutMode;
+    if (htmlContent) return 'reconstructed';
+    return 'framed';
+  });
   const [fileName, setFileName] = useState<string>(() => {
     const timeStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
     return title ? title.replace(/[/\\?%*:|"<>]/g, '_') : `DocuScan_${timeStamp}`;
@@ -68,21 +80,28 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   // Sync state when modal is opened
   React.useEffect(() => {
     if (isOpen) {
-      if (initialFormat) setFormat(initialFormat);
-      if (initialLayoutMode) setLayoutMode(initialLayoutMode);
+      const activeFormat = initialFormat || 'pdf';
+      setFormat(activeFormat);
+      if (initialLayoutMode) {
+        setLayoutMode(initialLayoutMode);
+      } else if (htmlContent) {
+        setLayoutMode('reconstructed');
+      } else {
+        setLayoutMode('framed');
+      }
       const timeStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
       setFileName(title ? title.replace(/[/\\?%*:|"<>]/g, '_') : `DocuScan_${timeStamp}`);
       setUploadedDriveLink(null);
     }
-  }, [isOpen, initialFormat, initialLayoutMode, title]);
+  }, [isOpen, initialFormat, initialLayoutMode, title, htmlContent]);
 
   if (!isOpen) return null;
 
-  const currentExt = format === 'pdf' ? '.pdf' : format === 'excel' ? '.xlsx' : '.csv';
-  const cleanBaseName = fileName.replace(/\.(pdf|xlsx|csv)$/i, '');
+  const currentExt = format === 'pdf' ? '.pdf' : format === 'word' ? '.docx' : format === 'excel' ? '.xlsx' : '.csv';
+  const cleanBaseName = fileName.replace(/\.(pdf|docx|xlsx|csv)$/i, '');
   const fullFileName = `${cleanBaseName}${currentExt}`;
 
-  // Execute Save as PDF / Excel to Local Device
+  // Execute Save as PDF / Word / Excel / CSV to Local Device
   const handleSaveToDevice = async () => {
     setIsProcessing(true);
     try {
@@ -94,6 +113,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           tableData: tableData.length > 0 ? tableData : undefined,
           customFileName: cleanBaseName,
           layoutMode,
+          htmlContent,
           autoDownload: true,
         });
 
@@ -105,9 +125,36 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             blob,
             dataUrl,
             driveSynced: false,
+            htmlContent,
           });
         }
-        onToast(`PDF သိမ်းဆည်းပြီးပါပြီ (${layoutMode === 'framed' ? 'Frame Cards' : layoutMode === 'text' ? 'Text Flow' : 'Table Matrix'}): ${savedName}`);
+        const layoutLabel = layoutMode === 'reconstructed' ? '1:1 Reconstructed' : layoutMode === 'matrix' ? 'Structured Matrix' : layoutMode === 'dual' ? 'Dual Review' : layoutMode === 'text' ? 'Text Flow' : 'Frame Cards';
+        onToast(`PDF သိမ်းဆည်းပြီးပါပြီ (${layoutLabel}): ${savedName}`);
+      } else if (format === 'word') {
+        const { blob, fileName: savedName, dataUrl } = WordExportService.generateAndSaveWord({
+          title: cleanBaseName,
+          htmlContent,
+          fullText: extractedText,
+          imageSrc: imageSrc || undefined,
+          tableData: tableData.length > 0 ? tableData : undefined,
+          layoutMode,
+          customFileName: cleanBaseName,
+          autoDownload: true,
+        });
+
+        if (onFileSavedLocally) {
+          onFileSavedLocally({
+            id: `word-${Date.now()}`,
+            name: savedName,
+            extension: 'docx',
+            blob,
+            dataUrl,
+            driveSynced: false,
+            htmlContent,
+          });
+        }
+        const layoutLabel = layoutMode === 'reconstructed' ? '1:1 Reconstructed' : layoutMode === 'matrix' ? 'Structured Matrix' : layoutMode === 'dual' ? 'Dual Review' : layoutMode === 'text' ? 'Text Flow' : 'Frame Cards';
+        onToast(`Microsoft Word (.docx) သိမ်းဆည်းပြီးပါပြီ (${layoutLabel}): ${savedName}`);
       } else if (format === 'excel') {
         const { blob, fileName: savedName } = SpreadsheetService.exportToExcel({
           fileName: cleanBaseName,
@@ -179,11 +226,26 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           tableData: tableData.length > 0 ? tableData : undefined,
           customFileName: cleanBaseName,
           layoutMode,
-          autoDownload: false, // Don't trigger browser download when uploading to drive
+          htmlContent,
+          autoDownload: false,
         });
         targetBlob = res.blob;
         targetName = res.fileName;
         targetMime = 'application/pdf';
+      } else if (format === 'word') {
+        const res = WordExportService.generateAndSaveWord({
+          title: cleanBaseName,
+          htmlContent,
+          fullText: extractedText,
+          imageSrc: imageSrc || undefined,
+          tableData: tableData.length > 0 ? tableData : undefined,
+          layoutMode,
+          customFileName: cleanBaseName,
+          autoDownload: false,
+        });
+        targetBlob = res.blob;
+        targetName = res.fileName;
+        targetMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
       } else if (format === 'excel') {
         const res = SpreadsheetService.exportToExcel({
           fileName: cleanBaseName,
@@ -225,9 +287,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           onFileSavedLocally({
             id: `${format}-${Date.now()}`,
             name: targetName,
-            extension: format === 'pdf' ? 'pdf' : format === 'excel' ? 'xlsx' : 'csv',
+            extension: format === 'pdf' ? 'pdf' : format === 'word' ? 'docx' : format === 'excel' ? 'xlsx' : 'csv',
             blob: targetBlob,
             driveSynced: true,
+            htmlContent,
           });
         }
 
@@ -252,6 +315,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         tableData: tableData.length > 0 ? tableData : undefined,
         customFileName: cleanBaseName,
         layoutMode,
+        htmlContent,
         autoDownload: false,
       });
       PdfService.printPdfBlob(blob);
@@ -279,7 +343,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 Save & Export Document
               </h3>
               <p className="text-xs text-emerald-100/90">
-                Frame Cards / Text Flow / Table Matrix ရွေးချယ်ပြီး Save & Drive Upload လုပ်ပါ
+                PDF / Word / Excel ရွေးချယ်ပြီး Save & Drive Upload လုပ်ပါ
               </p>
             </div>
           </div>
@@ -300,65 +364,182 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-200 mb-2">
               ၁။ File Format ရွေးချယ်ပါ (Select Output Format):
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
+              {/* PDF */}
               <button
                 type="button"
                 onClick={() => setFormat('pdf')}
-                className={`flex flex-col items-center justify-center p-3 rounded-xl border text-xs font-bold transition-all ${
+                className={`flex flex-col items-center justify-center p-2.5 rounded-xl border text-xs font-bold transition-all ${
                   format === 'pdf'
                     ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 ring-2 ring-rose-500/20 shadow-xs'
                     : 'border-slate-200 dark:border-dark-border bg-slate-50 dark:bg-dark-surface/60 text-slate-600 dark:text-slate-400 hover:border-rose-300'
                 }`}
               >
-                <FileText className={`w-5 h-5 mb-1.5 ${format === 'pdf' ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`} />
-                <span>PDF Document</span>
+                <FileText className={`w-5 h-5 mb-1 ${format === 'pdf' ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`} />
+                <span>PDF</span>
                 <span className="text-[10px] font-normal text-slate-500">.pdf</span>
               </button>
 
+              {/* Word */}
+              <button
+                type="button"
+                onClick={() => setFormat('word')}
+                className={`flex flex-col items-center justify-center p-2.5 rounded-xl border text-xs font-bold transition-all ${
+                  format === 'word'
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 ring-2 ring-blue-500/20 shadow-xs'
+                    : 'border-slate-200 dark:border-dark-border bg-slate-50 dark:bg-dark-surface/60 text-slate-600 dark:text-slate-400 hover:border-blue-300'
+                }`}
+              >
+                <FileEdit className={`w-5 h-5 mb-1 ${format === 'word' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500'}`} />
+                <span>Word</span>
+                <span className="text-[10px] font-normal text-slate-500">.docx</span>
+              </button>
+
+              {/* Excel */}
               <button
                 type="button"
                 onClick={() => setFormat('excel')}
-                className={`flex flex-col items-center justify-center p-3 rounded-xl border text-xs font-bold transition-all ${
+                className={`flex flex-col items-center justify-center p-2.5 rounded-xl border text-xs font-bold transition-all ${
                   format === 'excel'
                     ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 ring-2 ring-emerald-500/20 shadow-xs'
                     : 'border-slate-200 dark:border-dark-border bg-slate-50 dark:bg-dark-surface/60 text-slate-600 dark:text-slate-400 hover:border-emerald-300'
                 }`}
               >
-                <Table className={`w-5 h-5 mb-1.5 ${format === 'excel' ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500'}`} />
-                <span>Excel Workbook</span>
+                <Table className={`w-5 h-5 mb-1 ${format === 'excel' ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500'}`} />
+                <span>Excel</span>
                 <span className="text-[10px] font-normal text-slate-500">.xlsx</span>
               </button>
 
+              {/* CSV */}
               <button
                 type="button"
                 onClick={() => setFormat('csv')}
-                className={`flex flex-col items-center justify-center p-3 rounded-xl border text-xs font-bold transition-all ${
+                className={`flex flex-col items-center justify-center p-2.5 rounded-xl border text-xs font-bold transition-all ${
                   format === 'csv'
                     ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 ring-2 ring-teal-500/20 shadow-xs'
                     : 'border-slate-200 dark:border-dark-border bg-slate-50 dark:bg-dark-surface/60 text-slate-600 dark:text-slate-400 hover:border-teal-300'
                 }`}
               >
-                <FileSpreadsheet className={`w-5 h-5 mb-1.5 ${format === 'csv' ? 'text-teal-600 dark:text-teal-400' : 'text-slate-500'}`} />
-                <span>CSV Sheet</span>
+                <FileSpreadsheet className={`w-5 h-5 mb-1 ${format === 'csv' ? 'text-teal-600 dark:text-teal-400' : 'text-slate-500'}`} />
+                <span>CSV</span>
                 <span className="text-[10px] font-normal text-slate-500">.csv</span>
               </button>
             </div>
           </div>
 
-          {/* 2. Layout Mode Selection (Framed Cards / Text Flow / Table Matrix) */}
-          {format !== 'csv' && (
+          {/* 2. Layout Mode Selection (Reconstructed / Matrix / Dual / Framed Cards / Text Flow) */}
+          {(format === 'pdf' || format === 'word' || format === 'excel') && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-bold text-slate-700 dark:text-slate-200">
                   ၂။ Layout ဖွဲ့စည်းမှု ရွေးချယ်ပါ (Choose Document Layout):
                 </label>
                 <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                  {layoutMode === 'framed' ? '🗂️ Frame Cards' : layoutMode === 'text' ? '📝 Text Flow' : '▦ Matrix Grid'}
+                  {layoutMode === 'reconstructed'
+                    ? '✨ 1:1 Reconstructed'
+                    : layoutMode === 'matrix'
+                    ? '▦ Table Matrix'
+                    : layoutMode === 'dual'
+                    ? '📑 Dual Review'
+                    : layoutMode === 'framed'
+                    ? '🗂️ Frame Cards'
+                    : '📝 Text Flow'}
                 </span>
               </div>
 
               <div className="space-y-2.5">
-                {/* Option 1: Frame Cards */}
+                {/* Option 1: Matrix Mode (Full Data Grid Matrix) */}
+                <button
+                  type="button"
+                  onClick={() => setLayoutMode('matrix')}
+                  className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
+                    layoutMode === 'matrix'
+                      ? 'border-blue-500 bg-blue-50/80 dark:bg-blue-950/60 ring-1 ring-blue-500 shadow-xs'
+                      : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-blue-300'
+                  }`}
+                >
+                  <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+                    layoutMode === 'matrix' ? 'bg-teal-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
+                  }`}>
+                    <Grid className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <span>Structured Table Matrix (ဇယားကွက်အပြည့်အစုံ)</span>
+                        <span className="text-[10px] bg-teal-600 text-white font-semibold px-1.5 py-0.5 rounded-sm">Data Grid</span>
+                      </span>
+                      {layoutMode === 'matrix' && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                      အချက်အလက်အားလုံးကို No, Section, Topic နှင့် Details/Action Columns များဖြင့် အပြည့်အစုံ ဇယား Matrix ဆွဲပေးထားသော Layout (PDF / Word / Excel အားလုံး သုံးနိုင်ပါသည်)
+                    </p>
+                  </div>
+                </button>
+
+                {/* Option 2: Dual Review Mode (Side-by-Side Scan & OCR Reconstructed) */}
+                {(format === 'pdf' || format === 'word') && (
+                  <button
+                    type="button"
+                    onClick={() => setLayoutMode('dual')}
+                    className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
+                      layoutMode === 'dual'
+                        ? 'border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/60 ring-1 ring-indigo-500 shadow-xs'
+                        : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-indigo-300'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+                      layoutMode === 'dual' ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
+                    }`}>
+                      <Columns className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <span>Dual Review (မူရင်းမှတ်တမ်းနှင့် OCR ပြန်လည်တည်ဆောက်မှု နှိုင်းယှဉ်ချက်)</span>
+                          <span className="text-[10px] bg-indigo-600 text-white font-semibold px-1.5 py-0.5 rounded-sm">Dual View</span>
+                        </span>
+                        {layoutMode === 'dual' && <Check className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />}
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                        မူရင်း Scanned Document ဓာတ်ပုံနှင့် AI Reconstructed Layout တို့ကို စာမျက်နှာအလိုက် ယှဉ်တွဲဖော်ပြပေးသော Dual Verification Layout (PDF / Word)
+                      </p>
+                    </div>
+                  </button>
+                )}
+
+                {/* Option 0: Reconstructed HTML Layout (When available) */}
+                {htmlContent && (format === 'pdf' || format === 'word') && (
+                  <button
+                    type="button"
+                    onClick={() => setLayoutMode('reconstructed')}
+                    className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
+                      layoutMode === 'reconstructed'
+                        ? 'border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/50 ring-1 ring-emerald-500 shadow-xs'
+                        : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-emerald-300'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+                      layoutMode === 'reconstructed' ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
+                    }`}>
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <span>1:1 Pixel-Perfect Reconstructed Layout</span>
+                          <span className="text-[10px] bg-emerald-600 text-white font-semibold px-1.5 py-0.5 rounded-sm">AI Engine</span>
+                        </span>
+                        {layoutMode === 'reconstructed' && <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                        မူရင်းစာရွက်အတိုင်း တိကျသော Table Grid၊ Merged Cells၊ Header၊ Border၊ Font Style နှင့် အရောင်များ 1:1 ကိုက်ညီမှု
+                      </p>
+                    </div>
+                  </button>
+                )}
+
+                {/* Option 3: Frame Cards */}
                 <button
                   type="button"
                   onClick={() => setLayoutMode('framed')}
@@ -386,7 +567,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   </div>
                 </button>
 
-                {/* Option 2: Text Flow */}
+                {/* Option 4: Text Flow */}
                 <button
                   type="button"
                   onClick={() => setLayoutMode('text')}
@@ -410,34 +591,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
                       သပ်ရပ်သော Document Typography၊ ခေါင်းစဉ်ကြီး/ငယ်၊ စာပိုဒ်များနှင့် အစီအစဉ်တကျ ကျစ်လျစ်သော Bullet Point များဖြင့် ဖွဲ့စည်းမှု
-                    </p>
-                  </div>
-                </button>
-
-                {/* Option 3: Table Matrix */}
-                <button
-                  type="button"
-                  onClick={() => setLayoutMode('matrix')}
-                  className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
-                    layoutMode === 'matrix'
-                      ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/50 ring-1 ring-blue-500 shadow-xs'
-                      : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-blue-300'
-                  }`}
-                >
-                  <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
-                    layoutMode === 'matrix' ? 'bg-teal-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
-                  }`}>
-                    <Grid className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
-                        Structured Table Matrix (Full Data Grid)
-                      </span>
-                      {layoutMode === 'matrix' && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                      အချက်အလက်အားလုံးကို No, Section, Topic နှင့် Details/Action Columns များဖြင့် အပြည့်အစုံ ဇယား Matrix ဆွဲပေးထားသော Layout
                     </p>
                   </div>
                 </button>

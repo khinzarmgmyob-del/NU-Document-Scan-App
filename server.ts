@@ -41,6 +41,7 @@ async function startServer() {
 
   // Helper to generate content with fast multi-model fallback when 503/429/404 or timeout occurs
   const CANDIDATE_MODELS = [
+    "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-2.5-flash",
     "gemini-flash-latest",
@@ -295,6 +296,256 @@ async function startServer() {
         success: false,
         error: err.message || "Failed to auto-format document layout",
       });
+    }
+  });
+
+  // HYBRID DOCUMENT RECONSTRUCTION ENGINE ENDPOINT (Dual-Pass, Coordinate-Aware, HTML5+CSS)
+  app.post("/api/gemini/reconstruct-document", async (req, res) => {
+    try {
+      const { imageBase64, mimeType = "image/jpeg", customPrompt, apiKey } = req.body;
+
+      if (!imageBase64) {
+        return res.status(400).json({ error: "Missing imageBase64 data in request" });
+      }
+
+      const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z0-9.+_-]+;base64,/, "");
+      const ai = getGeminiClient(apiKey);
+
+      const reconstructionPrompt = customPrompt ||
+        "You are an expert Document AI Architect, Multilingual Typographer, and Pixel-Perfect Layout Reconstruction Engine.\n" +
+        "Your mission is to perform a coordinate-aware, dual-pass analysis on the input document image and generate a 100% faithful digital reproduction.\n\n" +
+        "MANDATORY INSTRUCTIONS:\n" +
+        "1. STRICT VERBATIM OCR (Zero omission, zero alteration):\n" +
+        "   - Transcribe every heading, label, sentence, table cell, bullet point (✔ / • / -), note (မှတ်ချက်), stamp, date, number, currency, and code.\n" +
+        "   - Complete, native Myanmar Unicode (U+1000 - U+109F) accuracy with zero broken ligatures (ဗျည်း၊ သရ၊ အသတ်၊ ဝစ္စပေါက်၊ အောက်မြစ်၊ တွဲလုံးများ).\n" +
+        "   - Never hallucinate, summarize, omit, translate, or paraphrase any text.\n\n" +
+        "2. COORDINATE-AWARE ELEMENT BOUNDARIES:\n" +
+        "   - For each structural block (header, footer, heading, paragraph, table, callout_box, list_item, key_value, signature_stamp), specify normalized bounding box coordinates: bbox = { ymin, xmin, ymax, xmax } on a 0 to 1000 scale relative to the page.\n" +
+        "   - Capture exact font hierarchy (fontSizePt, fontWeight: 'normal'|'bold'|'600'|'700', textAlign: 'left'|'center'|'right'|'justify', color, backgroundColor, borderColor).\n\n" +
+        "3. ADVANCED TABLE & STRUCTURE HANDLING:\n" +
+        "   - In 'htmlContent', output clean semantic tables: <table>, <thead>, <tbody>, <tr>, <th>, <td>.\n" +
+        "   - Explicitly calculate and include 'colspan' and 'rowspan' for all merged or multi-span header and body cells.\n" +
+        "   - Include inline CSS: 'width: 100%; border-collapse: collapse; margin: 10px 0; border: 1px solid #cbd5e1;'\n" +
+        "   - Header cells <th>: 'background-color: #f1f5f9; color: #0f172a; font-weight: bold; border: 1px solid #cbd5e1; padding: 6px 10px; text-align: center;'\n" +
+        "   - Body cells <td>: 'border: 1px solid #cbd5e1; padding: 6px 10px; vertical-align: middle;'\n" +
+        "   - Numbers right-aligned, text left-aligned, status/codes center-aligned.\n\n" +
+        "4. PIXEL-PERFECT HTML5 WITH INLINE CSS ('htmlContent'):\n" +
+        "   - 'htmlContent' MUST be a clean, self-contained HTML5 block matching the visual design, banner colors, cards, accent lines, and fonts.\n" +
+        "   - Font stack: 'Pyidaungsu', 'Myanmar Text', 'Noto Sans Myanmar', 'Segoe UI', -apple-system, sans-serif.\n" +
+        "   - Preserve colored callout cards (blue for rules, red for critical warnings, yellow for notes) with left accent border.\n\n" +
+        "5. Output valid JSON strictly conforming to the response schema.";
+
+      const { response, modelUsed } = await generateWithFallback(ai, {
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: cleanBase64,
+              },
+            },
+            {
+              text: reconstructionPrompt,
+            },
+          ],
+        },
+        config: {
+          temperature: 0.1,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING },
+              subtitle: { type: Type.STRING },
+              documentType: {
+                type: Type.STRING,
+                enum: ["general", "invoice", "table", "form", "guide", "certificate", "receipt"],
+              },
+              language: { type: Type.STRING },
+              orientation: { type: Type.STRING, enum: ["portrait", "landscape"] },
+              fullText: {
+                type: Type.STRING,
+                description: "Strict verbatim OCR text of the entire document without omission",
+              },
+              htmlContent: {
+                type: Type.STRING,
+                description: "Pixel-perfect HTML5 with Inline CSS matching original document layout and tables",
+              },
+              confidence: { type: Type.NUMBER },
+              elements: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    type: {
+                      type: Type.STRING,
+                      enum: [
+                        "header",
+                        "footer",
+                        "heading",
+                        "paragraph",
+                        "table",
+                        "callout_box",
+                        "list_item",
+                        "key_value",
+                        "signature_stamp",
+                      ],
+                    },
+                    text: { type: Type.STRING },
+                    bbox: {
+                      type: Type.OBJECT,
+                      properties: {
+                        ymin: { type: Type.NUMBER },
+                        xmin: { type: Type.NUMBER },
+                        ymax: { type: Type.NUMBER },
+                        xmax: { type: Type.NUMBER },
+                      },
+                      required: ["ymin", "xmin", "ymax", "xmax"],
+                    },
+                    styles: {
+                      type: Type.OBJECT,
+                      properties: {
+                        fontSizePt: { type: Type.NUMBER },
+                        fontWeight: { type: Type.STRING },
+                        textAlign: { type: Type.STRING },
+                        color: { type: Type.STRING },
+                        backgroundColor: { type: Type.STRING },
+                        borderColor: { type: Type.STRING },
+                      },
+                    },
+                  },
+                  required: ["id", "type", "text"],
+                },
+              },
+              tables: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    caption: { type: Type.STRING },
+                    rawMatrix: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                    },
+                  },
+                  required: ["id", "rawMatrix"],
+                },
+              },
+              sections: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    type: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    colorTheme: { type: Type.STRING },
+                    content: { type: Type.STRING },
+                  },
+                  required: ["type", "title"],
+                },
+              },
+            },
+            required: ["title", "fullText", "htmlContent", "tables", "elements"],
+          },
+        },
+      });
+
+      const responseText = response.text || "{}";
+      const parsed = JSON.parse(responseText);
+
+      return res.json({
+        success: true,
+        modelUsed,
+        ...parsed,
+      });
+    } catch (err: any) {
+      console.error("Document Reconstruction API Error:", err);
+      return res.json({
+        success: false,
+        error: err.message || "Failed to reconstruct document with Gemini AI",
+      });
+    }
+  });
+
+  // Export to Microsoft Word (.docx / Office HTML Document) Endpoint
+  app.post("/api/document/export-word", (req, res) => {
+    try {
+      const { title = "Document", htmlContent = "", fullText = "" } = req.body;
+      const cleanTitle = (title || "Document").replace(/[/\\?%*:|"<>]/g, "_");
+
+      const bodyHtml = htmlContent || `<div style="font-family:'Pyidaungsu','Segoe UI',sans-serif;"><pre>${fullText}</pre></div>`;
+
+      // Word Document with Office XML Namespaces and Unicode Font Mapping
+      const wordDocumentXml = `<!DOCTYPE html>
+<html xmlns:o='urn:schemas-microsoft-com:office:office' 
+      xmlns:w='urn:schemas-microsoft-com:office:word' 
+      xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+  <meta charset='utf-8'>
+  <title>${cleanTitle}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+      <w:DoNotOptimizeForBrowser/>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
+  <style>
+    @page Section1 {
+      size: 595.3pt 841.9pt; /* A4 */
+      margin: 1.0in 1.0in 1.0in 1.0in;
+      mso-header-margin: .5in;
+      mso-footer-margin: .5in;
+      mso-paper-source: 0;
+    }
+    div.Section1 { page: Section1; }
+    body {
+      font-family: 'Pyidaungsu', 'Myanmar Text', 'Segoe UI', Arial, sans-serif;
+      font-size: 11pt;
+      color: #0f172a;
+      line-height: 1.6;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 12pt 0;
+    }
+    th, td {
+      border: 1pt solid #cbd5e1;
+      padding: 6pt 10pt;
+      vertical-align: top;
+    }
+    th {
+      background-color: #f1f5f9;
+      font-weight: bold;
+      text-align: center;
+    }
+    h1 { font-size: 18pt; color: #0f172a; margin-bottom: 4pt; }
+    h2 { font-size: 14pt; color: #1e293b; margin-top: 12pt; margin-bottom: 4pt; }
+    h3 { font-size: 12pt; color: #334155; margin-top: 8pt; }
+    p { margin: 4pt 0; }
+  </style>
+</head>
+<body>
+  <div class="Section1">
+    ${bodyHtml}
+  </div>
+</body>
+</html>`;
+
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(cleanTitle)}.docx"`);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+      return res.send(Buffer.from(wordDocumentXml, "utf-8"));
+    } catch (err: any) {
+      console.error("Word Export Error:", err);
+      return res.status(500).json({ error: err.message || "Failed to generate Word document" });
     }
   });
 

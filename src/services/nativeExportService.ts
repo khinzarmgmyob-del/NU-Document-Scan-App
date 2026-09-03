@@ -4,6 +4,7 @@ import { FileOpener } from '@capacitor-community/file-opener';
 import { LocalFileItem } from '../types';
 import { SpreadsheetService } from './spreadsheetService';
 import { PdfService } from './pdfService';
+import { WordExportService } from './wordExportService';
 import { OcrService } from './ocrService';
 
 export interface NativeExportResult {
@@ -260,12 +261,59 @@ export class NativeExportService {
   }
 
   /**
-   * Universal Helper for any LocalFileItem (handles Excel, CSV, PDF, Audio, and Text)
+   * Export Word (.docx) using Native Filesystem + FileOpener
+   */
+  static async exportAndOpenWord({
+    title,
+    htmlContent,
+    fullText,
+    fileName,
+    onToast,
+  }: {
+    title: string;
+    htmlContent?: string;
+    fullText?: string;
+    fileName?: string;
+    onToast?: (msg: string) => void;
+  }): Promise<NativeExportResult> {
+    const baseName = (fileName || title).replace(/\.docx$/i, '');
+    const fullFileName = `${baseName}.docx`;
+    const mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    const { blob } = WordExportService.generateAndSaveWord({
+      title,
+      htmlContent,
+      fullText,
+      customFileName: baseName,
+      autoDownload: false,
+    });
+
+    return await this.saveAndOpenNativeFile({
+      fileName: fullFileName,
+      blob,
+      mimeType,
+      onToast,
+    });
+  }
+
+  /**
+   * Universal Helper for any LocalFileItem (handles Word, Excel, CSV, PDF, Audio, and Text)
    */
   static async exportAndOpenLocalFile(
     file: LocalFileItem,
     onToast?: (msg: string) => void
   ): Promise<NativeExportResult> {
+    // 0. Word File (.docx)
+    if (file.isWord || file.extension === 'docx' || file.name.toLowerCase().endsWith('.docx')) {
+      return await this.exportAndOpenWord({
+        title: file.name.replace(/\.docx$/i, ''),
+        htmlContent: file.htmlContent,
+        fullText: file.textContent || '',
+        fileName: file.name,
+        onToast,
+      });
+    }
+
     // 1. Excel File (.xlsx)
     if (file.isExcel || file.extension === 'xlsx' || file.name.toLowerCase().endsWith('.xlsx')) {
       let table = file.tableData && file.tableData.length > 0 ? file.tableData : null;

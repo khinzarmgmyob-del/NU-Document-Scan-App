@@ -1,5 +1,5 @@
 import React from 'react';
-import { Table, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { DocumentSectionBlock } from '../types';
 
 interface AutoFramedDocumentViewProps {
@@ -48,47 +48,6 @@ export const AutoFramedDocumentView: React.FC<AutoFramedDocumentViewProps> = ({
                 <h4 className="text-sm sm:text-base font-bold text-[#1E3A8A] dark:text-blue-400">
                   {section.title}
                 </h4>
-              </div>
-            );
-          }
-
-          // Table Section
-          if (section.type === 'table' && section.table && section.table.length > 0) {
-            return (
-              <div
-                key={sIdx}
-                className="rounded-lg border border-slate-200 dark:border-dark-border bg-white dark:bg-dark-card overflow-hidden shadow-2xs"
-              >
-                <div className="px-4 py-2.5 bg-slate-50 dark:bg-dark-surface border-b border-slate-200 dark:border-dark-border flex items-center gap-2">
-                  <Table className="w-4 h-4 text-[#0B2A59] dark:text-blue-400" />
-                  <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
-                    {section.title || 'Structured Table Matrix'}
-                  </h4>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <tbody>
-                      {section.table.map((row, rIdx) => (
-                        <tr
-                          key={rIdx}
-                          className={
-                            rIdx === 0
-                              ? 'bg-[#0B2A59] text-white font-semibold'
-                              : rIdx % 2 === 1
-                              ? 'bg-slate-50 dark:bg-dark-surface/50 text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-dark-border'
-                              : 'bg-white dark:bg-dark-card text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-dark-border'
-                          }
-                        >
-                          {row.map((cell, cIdx) => (
-                            <td key={cIdx} className="px-3 py-2 border-r border-slate-200/50 dark:border-dark-border last:border-r-0">
-                              {cell}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
               </div>
             );
           }
@@ -173,42 +132,6 @@ export const AutoFramedDocumentView: React.FC<AutoFramedDocumentViewProps> = ({
             </div>
           );
         })}
-
-        {/* Fallback Standalone Table if present and not in sections */}
-        {(!sections || !sections.some(s => s.type === 'table')) && tableData && tableData.length > 0 && (
-          <div className="rounded-lg border border-slate-200 dark:border-dark-border bg-white dark:bg-dark-card overflow-hidden shadow-2xs">
-            <div className="px-4 py-2.5 bg-slate-50 dark:bg-dark-surface border-b border-slate-200 dark:border-dark-border flex items-center gap-2">
-              <Table className="w-4 h-4 text-[#0B2A59] dark:text-blue-400" />
-              <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
-                Structured Table Matrix
-              </h4>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <tbody>
-                  {tableData.map((row, rIdx) => (
-                    <tr
-                      key={rIdx}
-                      className={
-                        rIdx === 0
-                          ? 'bg-[#0B2A59] text-white font-semibold'
-                          : rIdx % 2 === 1
-                          ? 'bg-slate-50 dark:bg-dark-surface/50 text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-dark-border'
-                          : 'bg-white dark:bg-dark-card text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-dark-border'
-                      }
-                    >
-                      {row.map((cell, cIdx) => (
-                        <td key={cIdx} className="px-3 py-2 border-r border-slate-200/50 dark:border-dark-border last:border-r-0">
-                          {cell}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

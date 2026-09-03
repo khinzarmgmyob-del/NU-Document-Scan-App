@@ -1,4 +1,5 @@
 import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 import { OcrService } from './ocrService';
 import { ExportLayoutMode } from '../types';
 
@@ -10,10 +11,119 @@ const UNICODE_FONT_STACK =
 
 export class PdfService {
   /**
+   * Generates a Pixel-Perfect PDF from structured HTML5 with Inline CSS
+   */
+  static async renderHtmlToPdf({
+    title,
+    htmlContent,
+    customFileName,
+    autoDownload = true,
+  }: {
+    title: string;
+    htmlContent: string;
+    customFileName?: string;
+    autoDownload?: boolean;
+  }): Promise<{ blob: Blob; fileName: string; dataUrl: string }> {
+    const cleanName = (customFileName || title || 'Scanned_Document').replace(/[/\\?%*:|"<>]/g, '_');
+    const fullFileName = cleanName.endsWith('.pdf') ? cleanName : `${cleanName}.pdf`;
+
+    // 1. Create temporary container with standard A4 width
+    const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.left = '-9999px';
+    container.style.top = '0';
+    container.style.width = '794px'; // Standard A4 at 96 DPI
+    container.style.backgroundColor = '#FFFFFF';
+    container.style.padding = '36px 42px';
+    container.style.boxSizing = 'border-box';
+    container.style.fontFamily = UNICODE_FONT_STACK;
+    container.style.color = '#0f172a';
+    container.style.lineHeight = '1.6';
+    container.innerHTML = htmlContent;
+
+    document.body.appendChild(container);
+
+    try {
+      // 2. Render to high-DPI canvas
+      const canvas = await html2canvas(container, {
+        scale: 2.0,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#FFFFFF',
+        logging: false,
+      });
+
+      const a4WidthPt = 595.28;
+      const a4HeightPt = 841.89;
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'pt',
+        format: 'a4',
+        compress: true,
+      });
+
+      const canvasWidth = canvas.width;
+      const canvasHeight = canvas.height;
+      const pageHeightPx = Math.round((canvasWidth * a4HeightPt) / a4WidthPt);
+
+      let renderedHeight = 0;
+      let pageIndex = 0;
+
+      while (renderedHeight < canvasHeight) {
+        if (pageIndex > 0) {
+          pdf.addPage('a4', 'portrait');
+        }
+
+        const sliceCanvas = document.createElement('canvas');
+        sliceCanvas.width = canvasWidth;
+        const currentSliceHeight = Math.min(pageHeightPx, canvasHeight - renderedHeight);
+        sliceCanvas.height = currentSliceHeight;
+
+        const sliceCtx = sliceCanvas.getContext('2d');
+        if (sliceCtx) {
+          sliceCtx.fillStyle = '#FFFFFF';
+          sliceCtx.fillRect(0, 0, canvasWidth, currentSliceHeight);
+          sliceCtx.drawImage(
+            canvas,
+            0,
+            renderedHeight,
+            canvasWidth,
+            currentSliceHeight,
+            0,
+            0,
+            canvasWidth,
+            currentSliceHeight
+          );
+
+          const imgData = sliceCanvas.toDataURL('image/jpeg', 0.95);
+          const sliceHeightPt = (currentSliceHeight * a4WidthPt) / canvasWidth;
+          pdf.addImage(imgData, 'JPEG', 0, 0, a4WidthPt, sliceHeightPt, undefined, 'FAST');
+        }
+
+        renderedHeight += pageHeightPx;
+        pageIndex++;
+      }
+
+      const blob = pdf.output('blob');
+      const dataUrl = pdf.output('dataurlstring');
+
+      if (autoDownload) {
+        pdf.save(fullFileName);
+      }
+
+      return { blob, fileName: fullFileName, dataUrl };
+    } finally {
+      if (document.body.contains(container)) {
+        document.body.removeChild(container);
+      }
+    }
+  }
+
+  /**
    * Generates a Document-Matching PDF in the selected layout mode with full multi-page pagination:
-   * - 'framed': 100% Raw Document-Matching (Navy Banner, Rounded Cards, Green Ticks, Accent Bars, Yellow Note Boxes)
+   * - 'reconstructed': 1:1 Pixel-Perfect Reconstructed HTML5 with tables, colspans/rowspans, and inline CSS
+   * - 'framed': Document-Matching (Navy Banner, Rounded Cards, Green Ticks, Accent Bars, Yellow Note Boxes)
    * - 'text': Clean Text Flow (1:1 Text Flow Preview matching, Structured Bullet Points, Paragraphs & Headings)
-   * - 'matrix': Structured Table Matrix (Unified Data Grid with Columns: No, Section, Topic, Details/Action)
    */
   static async generateAndSavePdf({
     title,
@@ -21,6 +131,8 @@ export class PdfService {
     tableData,
     customFileName,
     layoutMode = 'framed',
+    htmlContent,
+    imageSrc,
     autoDownload = true,
   }: {
     title: string;
@@ -29,8 +141,117 @@ export class PdfService {
     tableData?: string[][];
     customFileName?: string;
     layoutMode?: ExportLayoutMode;
+    htmlContent?: string;
     autoDownload?: boolean;
   }): Promise<{ blob: Blob; fileName: string; dataUrl: string }> {
+    let documentTitle = title || 'Scanned Document';
+
+    // 1. DUAL REVIEW MODE (Original Scanned Image + AI Reconstructed Layout)
+    if (layoutMode === 'dual') {
+      const dualHtml = `
+        <div style="font-family: ${UNICODE_FONT_STACK}; color: #0f172a; padding: 12px 16px;">
+          <!-- Dual Header -->
+          <div style="background-color: #0B2A59; color: #ffffff; padding: 16px 20px; border-radius: 8px; margin-bottom: 24px; text-align: center;">
+            <h1 style="margin: 0; font-size: 20px; font-weight: bold; color: #ffffff;">${documentTitle}</h1>
+            <p style="margin: 6px 0 0; font-size: 12px; color: #93C5FD;">Dual Review Document • မူရင်းမှတ်တမ်းနှင့် OCR ပြန်လည်တည်ဆောက်မှု နှိုင်းယှဉ်ချက်</p>
+          </div>
+
+          <!-- Section 1: Original Scanned Image -->
+          <div style="margin-bottom: 28px; border: 1.5px solid #cbd5e1; border-radius: 8px; overflow: hidden; background-color: #f8fafc;">
+            <div style="background-color: #e2e8f0; padding: 10px 16px; font-weight: bold; font-size: 13px; color: #1e293b; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #cbd5e1;">
+              <span>📸 ၁။ Original Scanned Capture (မူရင်းမှတ်တမ်း ဓာတ်ပုံ)</span>
+              <span style="font-size: 11px; color: #64748b; font-weight: normal;">High Resolution</span>
+            </div>
+            <div style="padding: 16px; text-align: center; background-color: #ffffff;">
+              ${imageSrc ? `<img src="${imageSrc}" style="max-width: 100%; max-height: 580px; object-fit: contain; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);" />` : '<p style="color: #94a3b8; font-style: italic;">(မူရင်းမှတ်တမ်း ဓာတ်ပုံ မရှိပါ)</p>'}
+            </div>
+          </div>
+
+          <!-- Section 2: AI Reconstructed Document on Next Page -->
+          <div style="page-break-before: always; padding-top: 12px;">
+            <div style="background-color: #065F46; color: #ffffff; padding: 12px 18px; border-radius: 6px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-weight: bold; font-size: 14px;">✨ ၂။ AI Reconstructed Document (1:1 ပြန်လည်တည်ဆောက်ထားသော စာရွက်စာတမ်း)</span>
+              <span style="font-size: 11px; color: #A7F3D0;">OCR Layout &amp; Text</span>
+            </div>
+            <div style="background-color: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 8px; padding: 20px;">
+              ${htmlContent || `<div style="white-space: pre-wrap; line-height: 1.6; font-size: 12px;">${ocrText}</div>`}
+            </div>
+          </div>
+        </div>
+      `;
+
+      try {
+        return await this.renderHtmlToPdf({
+          title,
+          htmlContent: dualHtml,
+          customFileName,
+          autoDownload,
+        });
+      } catch (err) {
+        console.warn('Dual HTML PDF rendering failed, falling back:', err);
+      }
+    }
+
+    // 2. MATRIX MODE (Structured Table Matrix Grid)
+    if (layoutMode === 'matrix') {
+      let matrixRows = tableData || [];
+      if (matrixRows.length === 0 && ocrText) {
+        matrixRows = OcrService.parseTextToSpreadsheetMatrix(ocrText);
+      }
+
+      if (matrixRows.length > 0) {
+        const matrixHtml = `
+          <div style="font-family: ${UNICODE_FONT_STACK}; color: #0f172a; padding: 12px 16px;">
+            <!-- Header Banner -->
+            <div style="background-color: #0B2A59; color: #ffffff; padding: 18px 24px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+              <h1 style="margin: 0; font-size: 20px; font-weight: bold; color: #ffffff;">${documentTitle}</h1>
+              <p style="margin: 6px 0 0; font-size: 12px; color: #93C5FD;">Structured Data Table Matrix • ဇယားကွက်အပြည့်အစုံ</p>
+            </div>
+
+            <!-- Table Matrix -->
+            <table style="width: 100%; border-collapse: collapse; margin-top: 14px; border: 1.5px solid #0B2A59; font-size: 11px;">
+              <thead>
+                <tr style="background-color: #0B2A59; color: #ffffff;">
+                  ${matrixRows[0].map(cell => `<th style="border: 1px solid #475569; padding: 9px 12px; font-weight: bold; font-size: 11.5px; text-align: left; background-color: #0B2A59; color: #ffffff;">${cell || ''}</th>`).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${matrixRows.slice(1).map((row, rIdx) => `
+                  <tr style="background-color: ${rIdx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+                    ${row.map(c => `<td style="border: 1px solid #cbd5e1; padding: 8px 12px; color: #1e293b; line-height: 1.5; font-size: 10.5px;">${c || ''}</td>`).join('')}
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+
+        try {
+          return await this.renderHtmlToPdf({
+            title,
+            htmlContent: matrixHtml,
+            customFileName,
+            autoDownload,
+          });
+        } catch (err) {
+          console.warn('Matrix HTML PDF rendering failed, falling back:', err);
+        }
+      }
+    }
+
+    // 3. RECONSTRUCTED MODE: If layout mode is 'reconstructed' and HTML content is provided, use pixel-perfect HTML renderer
+    if ((layoutMode === 'reconstructed' || !layoutMode) && htmlContent && htmlContent.trim().length > 0) {
+      try {
+        return await this.renderHtmlToPdf({
+          title,
+          htmlContent,
+          customFileName,
+          autoDownload,
+        });
+      } catch (renderErr) {
+        console.warn('HTML-to-PDF rendering failed, falling back to canvas layout:', renderErr);
+      }
+    }
     const cleanName = (customFileName || title || 'Scanned_Document').replace(/[/\\?%*:|"<>]/g, '_');
     const fullFileName = cleanName.endsWith('.pdf') ? cleanName : `${cleanName}.pdf`;
 
@@ -128,10 +349,20 @@ export class PdfService {
       return lines.length > 0 ? lines : [text];
     };
 
-    // Parse text to structured document model
-    const parsedDoc = OcrService.parseTextToSections(ocrText, tableData);
-    const documentTitle = parsedDoc.title || title || 'Scanned Document';
+    // Parse text to structured document model (clean document sections only, no attached table matrix)
+    const parsedDoc = OcrService.parseTextToSections(ocrText);
+    documentTitle = parsedDoc.title || documentTitle;
     const documentSubtitle = parsedDoc.subtitle || '';
+
+    // Strictly filter out any table blocks or matrix sections from PDF output
+    parsedDoc.sections = (parsedDoc.sections || []).filter(
+      (sec) =>
+        sec.type !== 'table' &&
+        !sec.table &&
+        !sec.title?.toLowerCase().includes('matrix') &&
+        !sec.title?.includes('ဇယားကွက်') &&
+        !sec.title?.toLowerCase().includes('table')
+    );
 
     let { canvas: curCanvas, ctx: curCtx } = createNewPageCanvas();
     let curY = 0;
@@ -183,191 +414,13 @@ export class PdfService {
     curCtx.textBaseline = 'top';
     curY = bannerHeight + 20 * scale;
 
-    // =========================================================================
-    // MODE A: STRUCTURED TABLE MATRIX (FULL GRID)
-    // =========================================================================
-    if (layoutMode === 'matrix') {
-      const colWidths = [
-        38 * scale,   // No
-        120 * scale,  // Section
-        150 * scale,  // Topic
-        contentWidth - (38 + 120 + 150) * scale, // Details / Subtext
-      ];
-
-      const headers = ['စဉ် (No)', 'ကဏ္ဍ (Section)', 'ခေါင်းစဉ် / အကြောင်းအရာ (Topic)', 'အသေးစိတ် ရှင်းလင်းချက် (Details / Notes)'];
-      const headerH = 28 * scale;
-
-      const drawMatrixHeader = (y: number) => {
-        curCtx.fillStyle = '#0B2A59';
-        curCtx.fillRect(pageMarginX, y, contentWidth, headerH);
-
-        let colX = pageMarginX;
-        curCtx.font = `bold ${9.5 * scale}px ${UNICODE_FONT_STACK}`;
-        curCtx.fillStyle = '#FFFFFF';
-        curCtx.textBaseline = 'middle';
-
-        for (let i = 0; i < headers.length; i++) {
-          curCtx.fillText(headers[i], colX + 6 * scale, y + headerH / 2);
-          colX += colWidths[i];
-          if (i < headers.length - 1) {
-            curCtx.strokeStyle = '#1E3A8A';
-            curCtx.beginPath();
-            curCtx.moveTo(colX, y);
-            curCtx.lineTo(colX, y + headerH);
-            curCtx.stroke();
-          }
-        }
-        curCtx.textBaseline = 'top';
-      };
-
-      drawMatrixHeader(curY);
-      curY += headerH;
-
-      let rowCounter = 1;
-
-      for (const sec of parsedDoc.sections) {
-        if (sec.type === 'table' && sec.table && sec.table.length > 0) {
-          for (let r = 1; r < sec.table.length; r++) {
-            const row = sec.table[r];
-            const topic = row[0] || row[1] || '';
-            const details = row.slice(1).join(' | ');
-
-            const detailLines = getWrappedLines(curCtx, details, colWidths[3] - 12 * scale, `normal ${9 * scale}px ${UNICODE_FONT_STACK}`);
-            const rowH = Math.max(22 * scale, detailLines.length * 14 * scale + 10 * scale);
-
-            checkAndBreakPage(rowH + headerH);
-            if (curY === 48 * scale) {
-              drawMatrixHeader(curY);
-              curY += headerH;
-            }
-
-            curCtx.fillStyle = rowCounter % 2 === 1 ? '#F8FAFC' : '#FFFFFF';
-            curCtx.fillRect(pageMarginX, curY, contentWidth, rowH);
-            curCtx.strokeStyle = '#CBD5E1';
-            curCtx.lineWidth = 0.8 * scale;
-            curCtx.strokeRect(pageMarginX, curY, contentWidth, rowH);
-
-            let colX = pageMarginX;
-            // No
-            curCtx.font = `bold ${9 * scale}px ${UNICODE_FONT_STACK}`;
-            curCtx.fillStyle = '#64748B';
-            curCtx.fillText(String(rowCounter++), colX + 6 * scale, curY + 6 * scale);
-            colX += colWidths[0];
-
-            // Section
-            curCtx.font = `bold ${9 * scale}px ${UNICODE_FONT_STACK}`;
-            curCtx.fillStyle = '#1E3A8A';
-            curCtx.fillText(sec.title || 'Table Matrix', colX + 6 * scale, curY + 6 * scale);
-            colX += colWidths[1];
-
-            // Topic
-            curCtx.font = `normal ${9 * scale}px ${UNICODE_FONT_STACK}`;
-            curCtx.fillStyle = '#0F172A';
-            curCtx.fillText(topic, colX + 6 * scale, curY + 6 * scale);
-            colX += colWidths[2];
-
-            // Details
-            curCtx.font = `normal ${9 * scale}px ${UNICODE_FONT_STACK}`;
-            curCtx.fillStyle = '#334155';
-            let dy = curY + 6 * scale;
-            for (const dl of detailLines) {
-              curCtx.fillText(dl, colX + 6 * scale, dy);
-              dy += 14 * scale;
-            }
-
-            curY += rowH;
-          }
-        } else if (sec.items && sec.items.length > 0) {
-          for (const item of sec.items) {
-            const topic = item.text;
-            const subtext = item.subtext || '';
-            const detailLines = getWrappedLines(curCtx, subtext || 'None', colWidths[3] - 12 * scale, `normal ${9 * scale}px ${UNICODE_FONT_STACK}`);
-            const rowH = Math.max(22 * scale, detailLines.length * 14 * scale + 10 * scale);
-
-            checkAndBreakPage(rowH + headerH);
-            if (curY === 48 * scale) {
-              drawMatrixHeader(curY);
-              curY += headerH;
-            }
-
-            curCtx.fillStyle = rowCounter % 2 === 1 ? '#F8FAFC' : '#FFFFFF';
-            curCtx.fillRect(pageMarginX, curY, contentWidth, rowH);
-            curCtx.strokeStyle = '#CBD5E1';
-            curCtx.lineWidth = 0.8 * scale;
-            curCtx.strokeRect(pageMarginX, curY, contentWidth, rowH);
-
-            let colX = pageMarginX;
-            // No
-            curCtx.font = `bold ${9 * scale}px ${UNICODE_FONT_STACK}`;
-            curCtx.fillStyle = '#64748B';
-            curCtx.fillText(String(rowCounter++), colX + 6 * scale, curY + 6 * scale);
-            colX += colWidths[0];
-
-            // Section
-            curCtx.font = `bold ${9 * scale}px ${UNICODE_FONT_STACK}`;
-            curCtx.fillStyle = '#1E3A8A';
-            curCtx.fillText(sec.title, colX + 6 * scale, curY + 6 * scale);
-            colX += colWidths[1];
-
-            // Topic
-            curCtx.font = `bold ${9 * scale}px ${UNICODE_FONT_STACK}`;
-            curCtx.fillStyle = '#059669';
-            curCtx.fillText((item.isCheck !== false ? '✔ ' : '• ') + topic, colX + 6 * scale, curY + 6 * scale);
-            colX += colWidths[2];
-
-            // Details
-            curCtx.font = `normal ${9 * scale}px ${UNICODE_FONT_STACK}`;
-            curCtx.fillStyle = '#334155';
-            let dy = curY + 6 * scale;
-            for (const dl of detailLines) {
-              curCtx.fillText(dl, colX + 6 * scale, dy);
-              dy += 14 * scale;
-            }
-
-            curY += rowH;
-          }
-        } else if (sec.content) {
-          const detailLines = getWrappedLines(curCtx, sec.content, colWidths[3] - 12 * scale, `normal ${9 * scale}px ${UNICODE_FONT_STACK}`);
-          const rowH = Math.max(22 * scale, detailLines.length * 14 * scale + 10 * scale);
-
-          checkAndBreakPage(rowH + headerH);
-          if (curY === 48 * scale) {
-            drawMatrixHeader(curY);
-            curY += headerH;
-          }
-
-          curCtx.fillStyle = '#FEF9C3';
-          curCtx.fillRect(pageMarginX, curY, contentWidth, rowH);
-          curCtx.strokeStyle = '#FDE047';
-          curCtx.strokeRect(pageMarginX, curY, contentWidth, rowH);
-
-          let colX = pageMarginX;
-          curCtx.font = `bold ${9 * scale}px ${UNICODE_FONT_STACK}`;
-          curCtx.fillStyle = '#854D0E';
-          curCtx.fillText(String(rowCounter++), colX + 6 * scale, curY + 6 * scale);
-          colX += colWidths[0];
-
-          curCtx.fillText(sec.title, colX + 6 * scale, curY + 6 * scale);
-          colX += colWidths[1];
-
-          curCtx.fillText('မှတ်ချက် / Note', colX + 6 * scale, curY + 6 * scale);
-          colX += colWidths[2];
-
-          let dy = curY + 6 * scale;
-          for (const dl of detailLines) {
-            curCtx.fillText(dl, colX + 6 * scale, dy);
-            dy += 14 * scale;
-          }
-
-          curY += rowH;
-        }
-      }
-    }
+    // Normalize layout: PDF output strictly uses clean document formats ('framed' or 'text') without matrix tables
+    const effectiveLayoutMode: 'framed' | 'text' = layoutMode === 'text' ? 'text' : 'framed';
 
     // =========================================================================
-    // MODE B: CLEAN TEXT FLOW TYPOGRAPHY (1:1 Document & Preview Matching)
+    // MODE A: CLEAN TEXT FLOW TYPOGRAPHY (1:1 Document & Preview Matching)
     // =========================================================================
-    else if (layoutMode === 'text') {
+    if (effectiveLayoutMode === 'text') {
       // Split raw OCR text lines or parsed sections to ensure 100% of all text is printed
       const rawLines = (ocrText || '').split('\n');
 
@@ -540,101 +593,13 @@ export class PdfService {
         }
         curY += 4 * scale;
       }
-
-      // If there's an attached tableData, render it cleanly at the bottom
-      if (tableData && tableData.length > 0) {
-        checkAndBreakPage(60 * scale);
-        curY += 10 * scale;
-
-        curCtx.font = `bold ${11.5 * scale}px ${UNICODE_FONT_STACK}`;
-        curCtx.fillStyle = '#0B2A59';
-        curCtx.fillText('ဇယားကွက် အချက်အလက်များ (Attached Data Table)', pageMarginX, curY);
-        curY += 20 * scale;
-
-        const numCols = tableData[0].length;
-        const colW = contentWidth / numCols;
-
-        for (let r = 0; r < tableData.length; r++) {
-          const row = tableData[r];
-          const isHeader = r === 0;
-          const rowH = (isHeader ? 24 : 20) * scale;
-
-          checkAndBreakPage(rowH + 4 * scale);
-
-          curCtx.fillStyle = isHeader ? '#0B2A59' : r % 2 === 1 ? '#F8FAFC' : '#FFFFFF';
-          curCtx.fillRect(pageMarginX, curY, contentWidth, rowH);
-          curCtx.strokeStyle = '#CBD5E1';
-          curCtx.strokeRect(pageMarginX, curY, contentWidth, rowH);
-
-          curCtx.font = isHeader
-            ? `bold ${9 * scale}px ${UNICODE_FONT_STACK}`
-            : `normal ${8.8 * scale}px ${UNICODE_FONT_STACK}`;
-          curCtx.fillStyle = isHeader ? '#FFFFFF' : '#1E293B';
-          curCtx.textBaseline = 'middle';
-
-          for (let c = 0; c < numCols; c++) {
-            curCtx.fillText(row[c] || '', pageMarginX + c * colW + 6 * scale, curY + rowH / 2);
-          }
-          curCtx.textBaseline = 'top';
-          curY += rowH;
-        }
-      }
     }
 
     // =========================================================================
-    // MODE C: FRAMED CARDS (100% RAW PHOTO MATCH & SOP MATRIX)
+    // MODE B: FRAMED CARDS (100% RAW PHOTO MATCH & SOP MATRIX)
     // =========================================================================
     else {
       for (const section of parsedDoc.sections) {
-        // Table section handling
-        if (section.type === 'table' && section.table && section.table.length > 0) {
-          const numCols = section.table[0].length;
-          const colWidth = contentWidth / Math.max(1, numCols);
-
-          checkAndBreakPage(60 * scale);
-          curCtx.font = `bold ${11.5 * scale}px ${UNICODE_FONT_STACK}`;
-          curCtx.fillStyle = '#0F172A';
-          curCtx.fillText(section.title || 'Table Matrix', pageMarginX, curY);
-          curY += 22 * scale;
-
-          for (let r = 0; r < section.table.length; r++) {
-            const row = section.table[r];
-            const isHeader = r === 0;
-            const rowH = (isHeader ? 26 : 22) * scale;
-
-            checkAndBreakPage(rowH + 4 * scale);
-
-            curCtx.fillStyle = isHeader ? '#0B2A59' : r % 2 === 1 ? '#F1F5F9' : '#FFFFFF';
-            curCtx.fillRect(pageMarginX, curY, contentWidth, rowH);
-
-            curCtx.strokeStyle = isHeader ? '#0B2A59' : '#CBD5E1';
-            curCtx.lineWidth = 0.75 * scale;
-
-            for (let c = 0; c < numCols; c++) {
-              const cellText = row[c] || '';
-              const cellX = pageMarginX + c * colWidth;
-              curCtx.strokeRect(cellX, curY, colWidth, rowH);
-
-              curCtx.font = isHeader
-                ? `bold ${9.5 * scale}px ${UNICODE_FONT_STACK}`
-                : `normal ${9 * scale}px ${UNICODE_FONT_STACK}`;
-              curCtx.fillStyle = isHeader ? '#FFFFFF' : '#1E293B';
-              curCtx.textBaseline = 'middle';
-
-              curCtx.save();
-              curCtx.beginPath();
-              curCtx.rect(cellX + 4 * scale, curY, colWidth - 8 * scale, rowH);
-              curCtx.clip();
-              curCtx.fillText(cellText, cellX + 6 * scale, curY + rowH / 2);
-              curCtx.restore();
-            }
-            curCtx.textBaseline = 'top';
-            curY += rowH;
-          }
-          curY += 16 * scale;
-          continue;
-        }
-
         // Standalone bottom text callout
         if (
           section.title &&

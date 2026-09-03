@@ -5,6 +5,7 @@ import {
   Copy,
   Check,
   FileText,
+  FileEdit,
   Table,
   Loader2,
   Sparkles,
@@ -28,13 +29,15 @@ import {
 } from 'lucide-react';
 import { SAMPLE_DOCUMENTS, SampleDoc, OcrService } from '../services/ocrService';
 import { AutoFramedDocumentView } from './AutoFramedDocumentView';
-import { DocumentSectionBlock, ExportLayoutMode } from '../types';
+import { DocumentSectionBlock, ExportLayoutMode, DocumentReconstruction } from '../types';
 
 interface ScannerTabProps {
   scannedImage: string | null;
   extractedText: string;
   tableRows?: string[][];
   onUpdateTableRows?: (rows: string[][]) => void;
+  reconstruction?: DocumentReconstruction | null;
+  onReconstructionChange?: (reconstruction: DocumentReconstruction) => void;
   isProcessingOcr: boolean;
   ocrProgress: { progress: number; status: string };
   selectedEngine: 'gemini' | 'spatial';
@@ -48,7 +51,7 @@ interface ScannerTabProps {
   onExportExcelDirectly?: () => void;
   onGoToExcel: () => void;
   onClearScan: () => void;
-  onOpenExportModal?: (defaultFormat?: 'pdf' | 'excel' | 'csv', layoutMode?: ExportLayoutMode) => void;
+  onOpenExportModal?: (defaultFormat?: 'pdf' | 'word' | 'excel' | 'csv', layoutMode?: ExportLayoutMode) => void;
   onQuickUploadToDrive?: () => void;
 }
 
@@ -57,6 +60,8 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
   extractedText,
   tableRows = [],
   onUpdateTableRows,
+  reconstruction,
+  onReconstructionChange,
   isProcessingOcr,
   ocrProgress,
   selectedEngine,
@@ -82,7 +87,8 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  const [viewMode, setViewMode] = useState<'framed' | 'text' | 'table' | 'split'>('framed');
+  const [localReconstruction, setLocalReconstruction] = useState<DocumentReconstruction | null>(reconstruction || null);
+  const [viewMode, setViewMode] = useState<'reconstructed' | 'framed' | 'text' | 'table' | 'split'>('reconstructed');
   const [isAutoFormatting, setIsAutoFormatting] = useState(false);
   const [isImageZoomed, setIsImageZoomed] = useState(false);
   const [formattedDoc, setFormattedDoc] = useState<{
@@ -92,13 +98,22 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
   } | null>(null);
 
   useEffect(() => {
+    if (reconstruction) {
+      setLocalReconstruction(reconstruction);
+      if (reconstruction.htmlContent) {
+        setViewMode('reconstructed');
+      }
+    }
+  }, [reconstruction]);
+
+  useEffect(() => {
     if (extractedText) {
-      const parsed = OcrService.parseTextToSections(extractedText, tableRows);
+      const parsed = OcrService.parseTextToSections(extractedText);
       setFormattedDoc(parsed);
     } else {
       setFormattedDoc(null);
     }
-  }, [extractedText, tableRows]);
+  }, [extractedText]);
 
   useEffect(() => {
     setApiKeyInput(OcrService.getStoredApiKey());
@@ -157,22 +172,53 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
   };
 
   const handleAutoFormatAndAdjust = async () => {
-    if (!extractedText) return;
+    if (!extractedText && !scannedImage) return;
     setIsAutoFormatting(true);
     try {
-      const res = await OcrService.autoFormatAndAlignLayout(extractedText, tableRows);
-      if (res.formattedText && res.formattedText !== extractedText) {
-        onTextChange(res.formattedText);
+      if (scannedImage) {
+        // Run full hybrid coordinate-aware document reconstruction on original scan
+        const recon = await OcrService.reconstructDocument(scannedImage, {
+          apiKey: OcrService.getStoredApiKey(),
+          deskew: true,
+        });
+
+        setLocalReconstruction(recon);
+        if (onReconstructionChange) {
+          onReconstructionChange(recon);
+        }
+        if (recon.fullText) {
+          onTextChange(recon.fullText);
+        }
+        if (recon.tableMatrix && recon.tableMatrix.length > 0 && onUpdateTableRows) {
+          onUpdateTableRows(recon.tableMatrix);
+        }
+        if (recon.sections && recon.sections.length > 0) {
+          setFormattedDoc({
+            title: recon.title || 'Reconstructed Document',
+            subtitle: recon.subtitle || '',
+            sections: recon.sections,
+          });
+        }
+        if (recon.htmlContent) {
+          setViewMode('reconstructed');
+        } else {
+          setViewMode('framed');
+        }
+      } else {
+        const res = await OcrService.autoFormatAndAlignLayout(extractedText, tableRows);
+        if (res.formattedText && res.formattedText !== extractedText) {
+          onTextChange(res.formattedText);
+        }
+        if (res.table && onUpdateTableRows) {
+          onUpdateTableRows(res.table);
+        }
+        setFormattedDoc({
+          title: res.title,
+          subtitle: res.subtitle || '',
+          sections: res.sections,
+        });
+        setViewMode('framed');
       }
-      if (res.table && onUpdateTableRows) {
-        onUpdateTableRows(res.table);
-      }
-      setFormattedDoc({
-        title: res.title,
-        subtitle: res.subtitle || '',
-        sections: res.sections,
-      });
-      setViewMode('framed');
     } catch (err) {
       console.error('Auto format error:', err);
     } finally {
@@ -372,16 +418,16 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
               {/* Convert to PDF Button */}
               <button
                 type="button"
                 onClick={() => {
-                  const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                  const currentLayout: ExportLayoutMode = localReconstruction?.htmlContent ? 'reconstructed' : viewMode === 'text' ? 'text' : 'framed';
                   if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
                   else onSaveAsPdf();
                 }}
-                disabled={isProcessingOcr || !extractedText}
+                disabled={isProcessingOcr || (!extractedText && !localReconstruction)}
                 className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 hover:from-rose-600 hover:to-red-700 text-white font-semibold text-xs shadow-md shadow-red-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
               >
                 <div className="flex items-center gap-2">
@@ -391,8 +437,30 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                   <div className="text-left">
                     <div className="font-bold text-xs">Save as PDF</div>
                     <div className="text-[10px] text-red-100">
-                      {viewMode === 'text' ? 'Text Flow' : viewMode === 'table' ? 'Matrix' : 'Frame Cards'}
+                      {localReconstruction?.htmlContent ? '1:1 Reconstructed' : viewMode === 'text' ? 'Text Flow' : 'Frame Cards'}
                     </div>
+                  </div>
+                </div>
+                <Download className="w-4 h-4" />
+              </button>
+
+              {/* Convert to Word Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  const currentLayout: ExportLayoutMode = localReconstruction?.htmlContent ? 'reconstructed' : viewMode === 'text' ? 'text' : 'framed';
+                  if (onOpenExportModal) onOpenExportModal('word', currentLayout);
+                }}
+                disabled={isProcessingOcr || (!extractedText && !localReconstruction)}
+                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-semibold text-xs shadow-md shadow-blue-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-white/20">
+                    <FileEdit className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-bold text-xs">Save as Word</div>
+                    <div className="text-[10px] text-blue-100">Word (.docx)</div>
                   </div>
                 </div>
                 <Download className="w-4 h-4" />
@@ -424,16 +492,60 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 <Download className="w-4 h-4" />
               </button>
 
+              {/* Save as Matrix Button (Direct Matrix Layout Export) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (onOpenExportModal) onOpenExportModal('pdf', 'matrix');
+                }}
+                disabled={isProcessingOcr || (!extractedText && !localReconstruction && tableRows.length === 0)}
+                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-700 hover:from-teal-700 hover:to-cyan-800 text-white font-semibold text-xs shadow-md shadow-teal-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
+                title="Save as Structured Table Matrix (PDF/Word/Excel)"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-white/20">
+                    <Grid className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-bold text-xs">Save as Matrix</div>
+                    <div className="text-[10px] text-teal-100">Table Data Grid</div>
+                  </div>
+                </div>
+                <Download className="w-4 h-4" />
+              </button>
+
+              {/* Save as Dual Button (Direct Dual Scan & OCR Export) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (onOpenExportModal) onOpenExportModal('pdf', 'dual');
+                }}
+                disabled={isProcessingOcr || (!extractedText && !localReconstruction)}
+                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white font-semibold text-xs shadow-md shadow-indigo-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
+                title="Save as Dual Review (Scan & OCR Side-by-Side)"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-white/20">
+                    <Columns className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-bold text-xs">Save as Dual</div>
+                    <div className="text-[10px] text-indigo-100">Dual Verification</div>
+                  </div>
+                </div>
+                <Download className="w-4 h-4" />
+              </button>
+
               {/* Upload to Google Drive Button */}
               <button
                 type="button"
                 onClick={() => {
-                  const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                  const currentLayout: ExportLayoutMode = localReconstruction?.htmlContent ? 'reconstructed' : viewMode === 'text' ? 'text' : 'framed';
                   if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
                   else if (onQuickUploadToDrive) onQuickUploadToDrive();
                 }}
-                disabled={isProcessingOcr || !extractedText}
-                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold text-xs shadow-md shadow-blue-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
+                disabled={isProcessingOcr || (!extractedText && !localReconstruction)}
+                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-sky-600 to-blue-700 hover:from-sky-700 hover:to-blue-800 text-white font-semibold text-xs shadow-md shadow-blue-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
               >
                 <div className="flex items-center gap-2">
                   <div className="p-1.5 rounded-lg bg-white/20">
@@ -441,29 +553,10 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                   </div>
                   <div className="text-left">
                     <div className="font-bold text-xs">Upload to Drive</div>
-                    <div className="text-[10px] text-blue-100">Direct Cloud Sync</div>
+                    <div className="text-[10px] text-sky-100">Cloud Sync</div>
                   </div>
                 </div>
-                <Sparkles className="w-4 h-4 text-blue-200" />
-              </button>
-
-              {/* Dual Side-by-Side Review Button */}
-              <button
-                type="button"
-                onClick={() => setViewMode('split')}
-                disabled={isProcessingOcr || !extractedText}
-                className="flex items-center justify-between p-3 rounded-xl bg-white dark:bg-dark-elevated hover:bg-emerald-50 dark:hover:bg-dark-border text-slate-800 dark:text-emerald-100 font-semibold text-xs border border-emerald-200 dark:border-dark-border shadow-2xs transition-all active:scale-[0.98] disabled:opacity-50"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-600">
-                    <Columns className="w-4 h-4" />
-                  </div>
-                  <div className="text-left">
-                    <div className="font-bold text-xs">Side-by-Side</div>
-                    <div className="text-[10px] text-slate-500 dark:text-slate-400">1:1 Dual Review</div>
-                  </div>
-                </div>
-                <Eye className="w-4 h-4 text-slate-400" />
+                <Sparkles className="w-4 h-4 text-sky-200" />
               </button>
             </div>
           </div>
@@ -531,6 +624,21 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
 
               {/* View Switcher Pills */}
               <div className="inline-flex rounded-lg p-0.5 bg-slate-100 dark:bg-dark-bg border border-slate-300 dark:border-dark-border text-xs">
+                {localReconstruction?.htmlContent && (
+                  <button
+                    onClick={() => setViewMode('reconstructed')}
+                    className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
+                      viewMode === 'reconstructed'
+                        ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs ring-1 ring-emerald-500/30'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                    title="1:1 Hybrid Coordinate-Aware Document Layout"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span className="hidden sm:inline">1:1 Reconstructed</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => setViewMode('framed')}
                   className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
@@ -630,39 +738,94 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 Formatting 1:1 PDF & Excel structure with Myanmar Unicode...
               </p>
             </div>
-          ) : extractedText ? (
+          ) : extractedText || localReconstruction ? (
             <div className="space-y-3">
-              {/* Dual Side-by-Side Split View */}
-              {viewMode === 'split' && scannedImage && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <div className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                      <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Original Scanned Document (100% Raw):</span>
+              {/* 1:1 Pixel-Perfect Reconstructed Document View */}
+              {viewMode === 'reconstructed' && localReconstruction?.htmlContent && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs px-1 text-slate-600 dark:text-slate-300">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                        1:1 Coordinate-Aware Document Layout
+                      </span>
+                      {localReconstruction.deskewAngleDeg !== undefined && localReconstruction.deskewAngleDeg !== 0 && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300">
+                          Auto-deskewed ({localReconstruction.deskewAngleDeg.toFixed(1)}°)
+                        </span>
+                      )}
                     </div>
-                    <div className="bg-slate-900 rounded-xl overflow-hidden p-2 flex items-center justify-center min-h-[350px] border border-slate-800">
-                      <img
-                        src={scannedImage}
-                        alt="Original Document"
-                        className="max-h-[480px] w-auto object-contain rounded-lg"
-                      />
-                    </div>
+                    <span className="text-[11px] text-slate-500">
+                      Pixel-perfect tables, borders & alignments
+                    </span>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <div className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>AI Framed OCR Result (1:1 Layout):</span>
+                  <div className="p-6 sm:p-8 bg-white dark:bg-white text-slate-900 rounded-xl border border-emerald-200 dark:border-dark-border shadow-sm min-h-[300px] overflow-x-auto">
+                    <div
+                      className="prose max-w-none text-slate-900 leading-relaxed font-sans"
+                      dangerouslySetInnerHTML={{ __html: localReconstruction.htmlContent }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Dual Side-by-Side Split View */}
+              {viewMode === 'split' && scannedImage && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-2.5 bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900 rounded-xl">
+                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-950 dark:text-indigo-200">
+                      <Columns className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      <span>Dual Review Mode (မူရင်းမှတ်တမ်းနှင့် OCR ပြန်လည်တည်ဆောက်မှု နှိုင်းယှဉ်ချက်)</span>
                     </div>
-                    <div className="max-h-[500px] overflow-y-auto pr-1">
-                      {formattedDoc && (
-                        <AutoFramedDocumentView
-                          title={formattedDoc.title}
-                          subtitle={formattedDoc.subtitle}
-                          sections={formattedDoc.sections}
-                          tableData={tableRows}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onOpenExportModal) onOpenExportModal('pdf', 'dual');
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition-all active:scale-95"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Save as Dual (PDF/Word)</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                        <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Original Scanned Document (100% Raw):</span>
+                      </div>
+                      <div className="bg-slate-900 rounded-xl overflow-hidden p-2 flex items-center justify-center min-h-[350px] border border-slate-800">
+                        <img
+                          src={scannedImage}
+                          alt="Original Document"
+                          className="max-h-[480px] w-auto object-contain rounded-lg"
                         />
-                      )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>{localReconstruction?.htmlContent ? '1:1 Reconstructed Layout' : 'AI Framed OCR Result'}:</span>
+                      </div>
+                      <div className="max-h-[500px] overflow-y-auto pr-1">
+                        {localReconstruction?.htmlContent ? (
+                          <div className="p-4 bg-white dark:bg-white text-slate-900 rounded-xl border border-emerald-200 shadow-xs">
+                            <div
+                              className="prose max-w-none text-slate-900 leading-relaxed text-xs"
+                              dangerouslySetInnerHTML={{ __html: localReconstruction.htmlContent }}
+                            />
+                          </div>
+                        ) : formattedDoc ? (
+                          <AutoFramedDocumentView
+                            title={formattedDoc.title}
+                            subtitle={formattedDoc.subtitle}
+                            sections={formattedDoc.sections}
+                            tableData={tableRows}
+                          />
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -744,7 +907,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
             <div className="mt-4 pt-3 border-t border-emerald-100 dark:border-dark-border flex items-center justify-between flex-wrap gap-2">
               <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
                 <span>Layout: </span>
-                <span className="font-bold text-emerald-700 dark:text-emerald-400">Frame Cards / Text Flow / Matrix</span>
+                <span className="font-bold text-emerald-700 dark:text-emerald-400">Reconstructed / Matrix / Dual / Cards</span>
               </div>
 
               <div className="flex items-center gap-2 flex-wrap">
@@ -752,7 +915,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                    const currentLayout: ExportLayoutMode = localReconstruction?.htmlContent ? 'reconstructed' : viewMode === 'text' ? 'text' : 'framed';
                     if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
                     else onSaveAsPdf();
                   }}
@@ -760,6 +923,32 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 >
                   <FileText className="w-3.5 h-3.5" />
                   <span>Save as PDF</span>
+                </button>
+
+                {/* Save as Matrix */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onOpenExportModal) onOpenExportModal('pdf', 'matrix');
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-700 hover:from-teal-700 hover:to-cyan-800 text-white font-semibold text-xs shadow-sm shadow-teal-500/20 transition-all active:scale-[0.98]"
+                  title="Save as Structured Table Matrix"
+                >
+                  <Grid className="w-3.5 h-3.5" />
+                  <span>Save as Matrix</span>
+                </button>
+
+                {/* Save as Dual */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onOpenExportModal) onOpenExportModal('pdf', 'dual');
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white font-semibold text-xs shadow-sm shadow-indigo-500/20 transition-all active:scale-[0.98]"
+                  title="Save as Dual Review (Scan & OCR Side-by-Side)"
+                >
+                  <Columns className="w-3.5 h-3.5" />
+                  <span>Save as Dual</span>
                 </button>
 
                 {/* Export Excel */}

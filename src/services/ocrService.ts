@@ -1,4 +1,12 @@
 import { createWorker } from 'tesseract.js';
+import { preprocessAndDeskewImage } from './imagePreprocessingService';
+import {
+  BoundingBox,
+  ReconstructedElement,
+  ReconstructedTable,
+  DocumentReconstruction,
+  DocumentSectionBlock,
+} from '../types';
 
 let workerPromise: Promise<Tesseract.Worker> | null = null;
 
@@ -511,30 +519,50 @@ export class OcrService {
   }
 
   /**
-   * AI Smart Vision Table Extraction using Gemini Flash (Fast, Accurate Table Matrix & Unicode)
-   * Calls the server-side /api/gemini/table-extract endpoint with automatic direct Google API fallback.
+   * HYBRID DOCUMENT RECONSTRUCTION ENGINE:
+   * 1. Preprocesses & auto-deskews image (straightens tilt, normalizes contrast, sharpens edges)
+   * 2. Executes Dual-Pass / Coordinate-Aware Gemini Reconstruction
+   * 3. Extracts strict verbatim OCR, coordinate bounding boxes (0-1000), complex tables (with colspan/rowspan), and pixel-perfect HTML5+CSS
    */
-  static async recognizeImageWithGeminiVision(
+  static async reconstructDocument(
     imageSource: string | File | Blob,
     onProgress?: (progress: number, status: string) => void
-  ): Promise<{ text: string; table: string[][]; engine: 'gemini' | 'spatial'; error?: string }> {
+  ): Promise<{
+    text: string;
+    table: string[][];
+    htmlContent: string;
+    elements: ReconstructedElement[];
+    tables: ReconstructedTable[];
+    sections: DocumentSectionBlock[];
+    reconstruction?: DocumentReconstruction;
+    engine: 'gemini' | 'spatial';
+    deskewAngleDeg?: number;
+    error?: string;
+  }> {
     const apiKey = this.getStoredApiKey();
-    const { base64: base64Data, mimeType } = await this.prepareCompressedBase64(imageSource);
-    const cleanBase64 = base64Data.replace(/^data:image\/[a-zA-Z0-9.+_-]+;base64,/, '');
 
-    // 1. First Attempt: Server-side API proxy /api/gemini/table-extract
+    if (onProgress) onProgress(0.1, 'Auto-Deskewing & Contrast Normalization (Image Preprocessing)...');
+    const preprocessed = await preprocessAndDeskewImage(imageSource, {
+      enableDeskew: true,
+      maxDimension: 2048,
+      sharpen: true,
+    });
+
+    const cleanBase64 = preprocessed.processedDataUrl.replace(/^data:image\/[a-zA-Z0-9.+_-]+;base64,/, '');
+
+    // 1. First Attempt: Server-side Hybrid Reconstruction Engine /api/gemini/reconstruct-document
     try {
-      if (onProgress) onProgress(0.2, 'AI Smart Vision analyzing document structure & Unicode...');
+      if (onProgress) onProgress(0.3, 'AI Coordinate-Aware Dual-Pass Reconstruction (Gemini Flash)...');
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-      const response = await fetch('/api/gemini/table-extract', {
+      const response = await fetch('/api/gemini/reconstruct-document', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageBase64: base64Data,
-          mimeType,
+          imageBase64: preprocessed.processedDataUrl,
+          mimeType: 'image/jpeg',
           apiKey: apiKey || undefined,
         }),
         signal: controller.signal,
@@ -545,31 +573,83 @@ export class OcrService {
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         const result = await response.json();
-        if (result.success && (result.text || (result.table && result.table.length > 0))) {
-          if (onProgress) onProgress(1.0, 'AI Table Extraction Complete');
-          const rawTable = result.table && Array.isArray(result.table) ? result.table : [];
-          const normalizedTable = rawTable.length > 0 
-            ? OcrService.normalizeTable(rawTable)
-            : OcrService.parseTextToTable(result.text || '');
+        if (result.success && (result.fullText || result.htmlContent)) {
+          if (onProgress) onProgress(1.0, 'Document Reconstruction & Table Match Complete');
+
+          const extractedTable =
+            result.tables?.[0]?.rawMatrix && Array.isArray(result.tables[0].rawMatrix)
+              ? result.tables[0].rawMatrix
+              : OcrService.parseTextToTable(result.fullText || '');
+
+          const reconstruction: DocumentReconstruction = {
+            title: result.title || 'Scanned Document',
+            subtitle: result.subtitle || '',
+            documentType: result.documentType || 'general',
+            language: result.language || 'my',
+            orientation: result.orientation || 'portrait',
+            fullText: result.fullText || '',
+            htmlContent: result.htmlContent || '',
+            elements: result.elements || [],
+            tables: result.tables || [],
+            sections: result.sections || [],
+            confidence: result.confidence || 0.98,
+            deskewAngleDeg: preprocessed.skewAngleDeg,
+          };
 
           return {
-            text: result.text || '',
-            table: normalizedTable,
+            text: result.fullText || '',
+            table: extractedTable,
+            htmlContent: result.htmlContent || '',
+            elements: result.elements || [],
+            tables: result.tables || [],
+            sections: result.sections || [],
+            reconstruction,
             engine: 'gemini',
+            deskewAngleDeg: preprocessed.skewAngleDeg,
           };
         }
       }
     } catch (err: any) {
-      console.warn('Server table-extract endpoint issue:', err.message || err);
+      console.warn('Server reconstruct-document endpoint issue:', err.message || err);
     }
 
-    // 2. Second Attempt: Direct Client-Side Gemini Vision API call (if user has API Key)
+    // 2. Second Attempt: Fallback to table-extract endpoint
+    try {
+      if (onProgress) onProgress(0.5, 'Running Table Extraction & Verbatim OCR...');
+      const fallbackRes = await fetch('/api/gemini/table-extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: preprocessed.processedDataUrl,
+          mimeType: 'image/jpeg',
+          apiKey: apiKey || undefined,
+        }),
+      });
+      const data = await fallbackRes.json();
+      if (data.success && data.text) {
+        const rawTable = data.table && Array.isArray(data.table) ? data.table : [];
+        return {
+          text: data.text,
+          table: rawTable.length > 0 ? OcrService.normalizeTable(rawTable) : OcrService.parseTextToTable(data.text),
+          htmlContent: `<div style="font-family:'Pyidaungsu','Segoe UI',sans-serif;line-height:1.6;"><pre>${data.text}</pre></div>`,
+          elements: [],
+          tables: [],
+          sections: [],
+          engine: 'gemini',
+          deskewAngleDeg: preprocessed.skewAngleDeg,
+        };
+      }
+    } catch (tblErr) {
+      console.warn('Fallback table-extract failed:', tblErr);
+    }
+
+    // 3. Third Attempt: Direct Client-Side Gemini Vision API call (if user has API Key)
     if (apiKey) {
-      const CANDIDATE_DIRECT_MODELS = ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+      const CANDIDATE_DIRECT_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
       for (const model of CANDIDATE_DIRECT_MODELS) {
         try {
-          if (onProgress) onProgress(0.5, `Connecting directly to Google Gemini (${model})...`);
-          const prompt = 
+          if (onProgress) onProgress(0.65, `Direct connection to Google Gemini (${model})...`);
+          const prompt =
             "You are an expert Document Intelligence, Multilingual OCR, and High-Precision Table & Structure Extraction Engine.\n" +
             "You have native, fluent understanding of Myanmar Unicode (မြန်မာ ယူနီကုဒ် / Unicode 5.2+), English, and international character sets.\n\n" +
             "MANDATORY OCR & EXTRACTION INSTRUCTIONS:\n" +
@@ -589,7 +669,7 @@ export class OcrService {
                 contents: [
                   {
                     parts: [
-                      { inlineData: { mimeType, data: cleanBase64 } },
+                      { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
                       { text: prompt },
                     ],
                   },
@@ -615,14 +695,19 @@ export class OcrService {
 
               if (onProgress) onProgress(1.0, 'AI Vision Extraction Complete');
               const rawTable = parsed.table && Array.isArray(parsed.table) ? parsed.table : [];
-              const normalizedTable = rawTable.length > 0 
+              const normalizedTable = rawTable.length > 0
                 ? OcrService.normalizeTable(rawTable)
                 : OcrService.parseTextToTable(parsed.fullText || textContent);
 
               return {
                 text: parsed.fullText || textContent || '',
                 table: normalizedTable,
+                htmlContent: `<div style="font-family:'Pyidaungsu','Segoe UI',sans-serif;line-height:1.6;"><pre>${parsed.fullText || textContent}</pre></div>`,
+                elements: [],
+                tables: [],
+                sections: [],
                 engine: 'gemini',
+                deskewAngleDeg: preprocessed.skewAngleDeg,
               };
             }
           }
@@ -632,20 +717,43 @@ export class OcrService {
       }
     }
 
-    // 3. Fallback when AI Vision is unavailable
-    if (!apiKey) {
-      console.warn('No Gemini API key stored. Fast Spatial OCR will run, but Myanmar Unicode requires Gemini Key.');
-    }
-
-    if (onProgress) onProgress(0.7, 'Using local 2D Spatial Clustering Engine...');
-    const fallbackResult = await OcrService.recognizeImageWithSpatialClustering(imageSource, onProgress);
+    // 4. Fallback when AI Vision is unavailable: Local Spatial Clustering Engine
+    if (onProgress) onProgress(0.8, 'Using local 2D Spatial Clustering Engine...');
+    const fallbackResult = await OcrService.recognizeImageWithSpatialClustering(preprocessed.processedDataUrl, onProgress);
     return {
       ...fallbackResult,
+      htmlContent: `<div style="font-family:'Pyidaungsu','Segoe UI',sans-serif;line-height:1.6;"><pre>${fallbackResult.text}</pre></div>`,
+      elements: [],
+      tables: [],
+      sections: [],
       engine: 'spatial',
-      error: apiKey 
+      deskewAngleDeg: preprocessed.skewAngleDeg,
+      error: apiKey
         ? 'Gemini Vision connection timeout. Used local Spatial Engine.'
         : '⚠️ မြန်မာစာ ယူနီကုဒ် အပြည့်အဝ ဖတ်ရှုနိုင်ရန် Google Gemini API Key ထည့်သွင်းပေးပါ။ (Used local Spatial Engine)',
     };
+  }
+
+  /**
+   * AI Smart Vision Table Extraction using Gemini Flash (Fast, Accurate Table Matrix & Unicode)
+   * Calls the Hybrid Document Reconstruction Engine with automatic fallback.
+   */
+  static async recognizeImageWithGeminiVision(
+    imageSource: string | File | Blob,
+    onProgress?: (progress: number, status: string) => void
+  ): Promise<{
+    text: string;
+    table: string[][];
+    engine: 'gemini' | 'spatial';
+    htmlContent?: string;
+    elements?: ReconstructedElement[];
+    tables?: ReconstructedTable[];
+    sections?: DocumentSectionBlock[];
+    reconstruction?: DocumentReconstruction;
+    deskewAngleDeg?: number;
+    error?: string;
+  }> {
+    return await this.reconstructDocument(imageSource, onProgress);
   }
 
   /**
@@ -1074,17 +1182,6 @@ export class OcrService {
 
     if (currentSection && (currentSection.items.length > 0 || currentSection.content || currentSection.title)) {
       sections.push(currentSection);
-    }
-
-    // If tableData is present, append as structured table section
-    if (tableData && tableData.length > 0) {
-      sections.push({
-        type: 'table',
-        title: 'ဇယားကွက် အချက်အလက်များ (Structured Table Matrix)',
-        colorTheme: 'emerald',
-        table: this.normalizeTable(tableData),
-        items: [],
-      });
     }
 
     return { title, subtitle, sections };
