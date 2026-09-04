@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { OcrService } from './ocrService';
+import { DocumentGridService } from './documentGridService';
 import { ExportLayoutMode } from '../types';
 
 /**
@@ -145,6 +146,32 @@ export class PdfService {
     autoDownload?: boolean;
   }): Promise<{ blob: Blob; fileName: string; dataUrl: string }> {
     let documentTitle = title || 'Scanned Document';
+
+    // 0. GEMINI AI SMART CELL & GRID CALCULATION ENGINE (Exact Borders, Colors, Rows, Spacing & Cell Alignment)
+    if (layoutMode === 'ai_grid') {
+      try {
+        const gridData = await DocumentGridService.fetchAiGridData({
+          imageBase64: imageSrc || undefined,
+          ocrText,
+          tableData,
+          title: documentTitle,
+        });
+
+        const aiGridHtml = DocumentGridService.buildHtmlFromAiGrid(gridData, {
+          isWord: false,
+          containerPadding: '28px 36px',
+        });
+
+        return await this.renderHtmlToPdf({
+          title: documentTitle,
+          htmlContent: aiGridHtml,
+          customFileName,
+          autoDownload,
+        });
+      } catch (gridErr) {
+        console.warn('AI Grid PDF export encountered error, falling back to layout:', gridErr);
+      }
+    }
 
     // 1. DUAL REVIEW MODE (Original Scanned Image + AI Reconstructed Layout)
     if (layoutMode === 'dual') {

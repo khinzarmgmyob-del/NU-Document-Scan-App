@@ -28,6 +28,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { SAMPLE_DOCUMENTS, SampleDoc, OcrService } from '../services/ocrService';
+import { DocumentGridService } from '../services/documentGridService';
 import { AutoFramedDocumentView } from './AutoFramedDocumentView';
 import { DocumentSectionBlock, ExportLayoutMode, DocumentReconstruction } from '../types';
 
@@ -88,7 +89,9 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const [localReconstruction, setLocalReconstruction] = useState<DocumentReconstruction | null>(reconstruction || null);
-  const [viewMode, setViewMode] = useState<'reconstructed' | 'framed' | 'text' | 'table' | 'split'>('reconstructed');
+  const [viewMode, setViewMode] = useState<'reconstructed' | 'framed' | 'ai_grid'>('reconstructed');
+  const [aiGridHtml, setAiGridHtml] = useState<string | null>(null);
+  const [isLoadingAiGrid, setIsLoadingAiGrid] = useState(false);
   const [isAutoFormatting, setIsAutoFormatting] = useState(false);
   const [isImageZoomed, setIsImageZoomed] = useState(false);
   const [formattedDoc, setFormattedDoc] = useState<{
@@ -96,6 +99,28 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
     subtitle: string;
     sections: DocumentSectionBlock[];
   } | null>(null);
+
+  const loadAiGridData = async (forceRefresh = false) => {
+    if ((aiGridHtml && !forceRefresh) || (!extractedText && !scannedImage && (!tableRows || tableRows.length === 0))) return;
+    setIsLoadingAiGrid(true);
+    try {
+      const grid = await DocumentGridService.fetchAiGridData({
+        imageBase64: scannedImage || undefined,
+        ocrText: extractedText,
+        tableData: tableRows,
+        title: formattedDoc?.title || 'Extracted Document',
+      });
+      const html = DocumentGridService.buildHtmlFromAiGrid(grid, {
+        isWord: false,
+        containerPadding: '20px 24px',
+      });
+      setAiGridHtml(html);
+    } catch (err) {
+      console.warn('Failed to load AI Grid in ScannerTab:', err);
+    } finally {
+      setIsLoadingAiGrid(false);
+    }
+  };
 
   useEffect(() => {
     if (reconstruction) {
@@ -113,7 +138,14 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
     } else {
       setFormattedDoc(null);
     }
+    setAiGridHtml(null);
   }, [extractedText]);
+
+  useEffect(() => {
+    if (viewMode === 'ai_grid' && !aiGridHtml && (extractedText || scannedImage)) {
+      loadAiGridData();
+    }
+  }, [viewMode, extractedText, scannedImage]);
 
   useEffect(() => {
     setApiKeyInput(OcrService.getStoredApiKey());
@@ -406,24 +438,24 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
             />
           </div>
 
-          {/* DEDICATED 1-CLICK INSTANT CONVERSION ACTION HUB (With Frame Cards / Text Flow / Matrix & Drive Upload) */}
+          {/* DEDICATED 1-CLICK INSTANT CONVERSION ACTION HUB */}
           <div className="p-3.5 bg-gradient-to-r from-emerald-50/80 via-teal-50/50 to-slate-50/80 dark:from-dark-surface dark:via-dark-card dark:to-dark-surface border-t border-emerald-100 dark:border-dark-border">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-bold text-slate-800 dark:text-emerald-200 flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                Save & Drive Options (Frame Cards / Text Flow / Matrix):
+                Save & Export Options ({viewMode === 'ai_grid' ? 'Gemini AI Grid Engine' : viewMode === 'framed' ? 'Frame Cards' : 'Reconstructed'}):
               </span>
               <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
                 100% 1:1 Matching
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
               {/* Convert to PDF Button */}
               <button
                 type="button"
                 onClick={() => {
-                  const currentLayout: ExportLayoutMode = localReconstruction?.htmlContent ? 'reconstructed' : viewMode === 'text' ? 'text' : 'framed';
+                  const currentLayout: ExportLayoutMode = viewMode === 'ai_grid' ? 'ai_grid' : viewMode === 'framed' ? 'framed' : 'reconstructed';
                   if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
                   else onSaveAsPdf();
                 }}
@@ -437,7 +469,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                   <div className="text-left">
                     <div className="font-bold text-xs">Save as PDF</div>
                     <div className="text-[10px] text-red-100">
-                      {localReconstruction?.htmlContent ? '1:1 Reconstructed' : viewMode === 'text' ? 'Text Flow' : 'Frame Cards'}
+                      {viewMode === 'ai_grid' ? 'AI Grid Engine' : viewMode === 'framed' ? 'Frame Cards' : 'Reconstructed'}
                     </div>
                   </div>
                 </div>
@@ -448,7 +480,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const currentLayout: ExportLayoutMode = localReconstruction?.htmlContent ? 'reconstructed' : viewMode === 'text' ? 'text' : 'framed';
+                  const currentLayout: ExportLayoutMode = viewMode === 'ai_grid' ? 'ai_grid' : viewMode === 'framed' ? 'framed' : 'reconstructed';
                   if (onOpenExportModal) onOpenExportModal('word', currentLayout);
                 }}
                 disabled={isProcessingOcr || (!extractedText && !localReconstruction)}
@@ -460,7 +492,9 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                   </div>
                   <div className="text-left">
                     <div className="font-bold text-xs">Save as Word</div>
-                    <div className="text-[10px] text-blue-100">Word (.docx)</div>
+                    <div className="text-[10px] text-blue-100">
+                      {viewMode === 'ai_grid' ? 'AI Grid (.docx)' : viewMode === 'framed' ? 'Frame Cards' : 'Reconstructed'}
+                    </div>
                   </div>
                 </div>
                 <Download className="w-4 h-4" />
@@ -470,12 +504,12 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                  const currentLayout: ExportLayoutMode = viewMode === 'ai_grid' ? 'ai_grid' : viewMode === 'framed' ? 'framed' : 'reconstructed';
                   if (onOpenExportModal) onOpenExportModal('excel', currentLayout);
                   else if (onExportExcelDirectly) onExportExcelDirectly();
                   else onGoToExcel();
                 }}
-                disabled={isProcessingOcr || (!extractedText && tableRows.length === 0)}
+                disabled={isProcessingOcr || (!extractedText && (!tableRows || tableRows.length === 0))}
                 className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-semibold text-xs shadow-md shadow-emerald-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
               >
                 <div className="flex items-center gap-2">
@@ -485,52 +519,30 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                   <div className="text-left">
                     <div className="font-bold text-xs">Save as Excel</div>
                     <div className="text-[10px] text-emerald-100">
-                      {viewMode === 'text' ? 'Text Flow' : viewMode === 'table' ? 'Matrix' : 'Framed SOP'}
+                      {viewMode === 'ai_grid' ? 'Excel AI Grid' : viewMode === 'framed' ? 'Frame Cards' : 'Excel Table'}
                     </div>
                   </div>
                 </div>
                 <Download className="w-4 h-4" />
               </button>
 
-              {/* Save as Matrix Button (Direct Matrix Layout Export) */}
+              {/* Direct Gemini AI Grid Engine Export Button */}
               <button
                 type="button"
                 onClick={() => {
-                  if (onOpenExportModal) onOpenExportModal('pdf', 'matrix');
+                  if (onOpenExportModal) onOpenExportModal('pdf', 'ai_grid');
                 }}
-                disabled={isProcessingOcr || (!extractedText && !localReconstruction && tableRows.length === 0)}
-                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-700 hover:from-teal-700 hover:to-cyan-800 text-white font-semibold text-xs shadow-md shadow-teal-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
-                title="Save as Structured Table Matrix (PDF/Word/Excel)"
+                disabled={isProcessingOcr || (!extractedText && !localReconstruction && (!tableRows || tableRows.length === 0))}
+                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-emerald-700 via-teal-700 to-cyan-800 hover:from-emerald-800 hover:to-cyan-900 text-white font-semibold text-xs shadow-md shadow-teal-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
+                title="Gemini AI Smart Cell & Grid Calculation Engine (PDF/Word/Excel)"
               >
                 <div className="flex items-center gap-2">
                   <div className="p-1.5 rounded-lg bg-white/20">
-                    <Grid className="w-4 h-4" />
+                    <Sparkles className="w-4 h-4" />
                   </div>
                   <div className="text-left">
-                    <div className="font-bold text-xs">Save as Matrix</div>
-                    <div className="text-[10px] text-teal-100">Table Data Grid</div>
-                  </div>
-                </div>
-                <Download className="w-4 h-4" />
-              </button>
-
-              {/* Save as Dual Button (Direct Dual Scan & OCR Export) */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (onOpenExportModal) onOpenExportModal('pdf', 'dual');
-                }}
-                disabled={isProcessingOcr || (!extractedText && !localReconstruction)}
-                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white font-semibold text-xs shadow-md shadow-indigo-500/20 transition-all active:scale-[0.98] disabled:opacity-50"
-                title="Save as Dual Review (Scan & OCR Side-by-Side)"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-lg bg-white/20">
-                    <Columns className="w-4 h-4" />
-                  </div>
-                  <div className="text-left">
-                    <div className="font-bold text-xs">Save as Dual</div>
-                    <div className="text-[10px] text-indigo-100">Dual Verification</div>
+                    <div className="font-bold text-xs">Gemini AI Grid</div>
+                    <div className="text-[10px] text-teal-100">Smart Calculation</div>
                   </div>
                 </div>
                 <Download className="w-4 h-4" />
@@ -540,7 +552,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const currentLayout: ExportLayoutMode = localReconstruction?.htmlContent ? 'reconstructed' : viewMode === 'text' ? 'text' : 'framed';
+                  const currentLayout: ExportLayoutMode = viewMode === 'ai_grid' ? 'ai_grid' : viewMode === 'framed' ? 'framed' : 'reconstructed';
                   if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
                   else if (onQuickUploadToDrive) onQuickUploadToDrive();
                 }}
@@ -622,78 +634,55 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 <span>AI Auto-Frame & Align</span>
               </button>
 
-              {/* View Switcher Pills */}
+              {/* View Switcher Pills - Exactly 3 modes: Reconstructed, Frame Cards, Gemini AI Smart Cell & Grid Calculation Engine */}
               <div className="inline-flex rounded-lg p-0.5 bg-slate-100 dark:bg-dark-bg border border-slate-300 dark:border-dark-border text-xs">
-                {localReconstruction?.htmlContent && (
-                  <button
-                    onClick={() => setViewMode('reconstructed')}
-                    className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
-                      viewMode === 'reconstructed'
-                        ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs ring-1 ring-emerald-500/30'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                    }`}
-                    title="1:1 Hybrid Coordinate-Aware Document Layout"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                    <span className="hidden sm:inline">1:1 Reconstructed</span>
-                  </button>
-                )}
-
+                {/* 1. Reconstructed */}
                 <button
+                  type="button"
+                  onClick={() => setViewMode('reconstructed')}
+                  className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 transition-all ${
+                    viewMode === 'reconstructed'
+                      ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs ring-1 ring-emerald-500/30'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                  title="Reconstructed (1:1 Hybrid Coordinate-Aware Document Layout)"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Reconstructed</span>
+                </button>
+
+                {/* 2. Frame Cards */}
+                <button
+                  type="button"
                   onClick={() => setViewMode('framed')}
-                  className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
+                  className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 transition-all ${
                     viewMode === 'framed'
-                      ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs'
+                      ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs ring-1 ring-emerald-500/30'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
                   }`}
-                  title="Auto-Framed Cards & Structure"
+                  title="Frame Cards (Auto-Framed Cards & Structure)"
                 >
-                  <Layout className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Framed Cards</span>
+                  <Layout className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                  <span>Frame Cards</span>
                 </button>
 
+                {/* 3. Gemini AI Smart Cell & Grid Calculation Engine */}
                 <button
-                  onClick={() => setViewMode('text')}
-                  className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
-                    viewMode === 'text'
-                      ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs'
+                  type="button"
+                  onClick={() => {
+                    setViewMode('ai_grid');
+                    loadAiGridData();
+                  }}
+                  className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 transition-all ${
+                    viewMode === 'ai_grid'
+                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-xs font-bold'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
                   }`}
-                  title="Raw OCR Text Buffer"
+                  title="Gemini AI Smart Cell & Grid Calculation Engine (Precise Cell Borders, Colors & Alignment)"
                 >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Text Flow</span>
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Gemini AI Smart Cell & Grid Calculation Engine</span>
                 </button>
-
-                {tableRows && tableRows.length > 0 && (
-                  <button
-                    onClick={() => setViewMode('table')}
-                    className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
-                      viewMode === 'table'
-                        ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                    }`}
-                    title="2D Table Matrix"
-                  >
-                    <Table className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Matrix</span>
-                  </button>
-                )}
-
-                {scannedImage && (
-                  <button
-                    onClick={() => setViewMode('split')}
-                    className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
-                      viewMode === 'split'
-                        ? 'bg-white dark:bg-dark-card text-emerald-700 dark:text-emerald-300 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                    }`}
-                    title="Dual Side-by-Side View"
-                  >
-                    <Columns className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Dual</span>
-                  </button>
-                )}
               </div>
 
               {/* Copy Text Button */}
@@ -740,151 +729,170 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
             </div>
           ) : extractedText || localReconstruction ? (
             <div className="space-y-3">
-              {/* 1:1 Pixel-Perfect Reconstructed Document View */}
-              {viewMode === 'reconstructed' && localReconstruction?.htmlContent && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs px-1 text-slate-600 dark:text-slate-300">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                        1:1 Coordinate-Aware Document Layout
-                      </span>
-                      {localReconstruction.deskewAngleDeg !== undefined && localReconstruction.deskewAngleDeg !== 0 && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300">
-                          Auto-deskewed ({localReconstruction.deskewAngleDeg.toFixed(1)}°)
+              {/* Mode 1: Reconstructed View */}
+              {viewMode === 'reconstructed' && (
+                localReconstruction?.htmlContent ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs px-1 text-slate-600 dark:text-slate-300">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                          1:1 Coordinate-Aware Document Layout
                         </span>
-                      )}
+                        {localReconstruction.deskewAngleDeg !== undefined && localReconstruction.deskewAngleDeg !== 0 && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300">
+                            Auto-deskewed ({localReconstruction.deskewAngleDeg.toFixed(1)}°)
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[11px] text-slate-500">
+                        Pixel-perfect tables, borders & alignments
+                      </span>
                     </div>
-                    <span className="text-[11px] text-slate-500">
-                      Pixel-perfect tables, borders & alignments
-                    </span>
-                  </div>
 
-                  <div className="p-6 sm:p-8 bg-white dark:bg-white text-slate-900 rounded-xl border border-emerald-200 dark:border-dark-border shadow-sm min-h-[300px] overflow-x-auto">
-                    <div
-                      className="prose max-w-none text-slate-900 leading-relaxed font-sans"
-                      dangerouslySetInnerHTML={{ __html: localReconstruction.htmlContent }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Dual Side-by-Side Split View */}
-              {viewMode === 'split' && scannedImage && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-2.5 bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900 rounded-xl">
-                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-950 dark:text-indigo-200">
-                      <Columns className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span>Dual Review Mode (မူရင်းမှတ်တမ်းနှင့် OCR ပြန်လည်တည်ဆောက်မှု နှိုင်းယှဉ်ချက်)</span>
+                    <div className="p-6 sm:p-8 bg-white dark:bg-white text-slate-900 rounded-xl border border-emerald-200 dark:border-dark-border shadow-sm min-h-[300px] overflow-x-auto">
+                      <div
+                        className="prose max-w-none text-slate-900 leading-relaxed font-sans"
+                        dangerouslySetInnerHTML={{ __html: localReconstruction.htmlContent }}
+                      />
                     </div>
+                  </div>
+                ) : (
+                  <div className="py-12 flex flex-col items-center justify-center bg-white dark:bg-dark-surface/40 rounded-xl border border-dashed border-emerald-300 text-center px-4">
+                    <Sparkles className="w-8 h-8 text-emerald-600 mb-2" />
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                      1:1 Reconstructed Document Layout
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1 mb-3 max-w-md">
+                      မူရင်းစာရွက်အတိုင်း တိကျသော Table Grid၊ Merged Cells၊ Header၊ Border၊ Font Style နှင့် အရောင်များဖြင့် ပြန်လည်တည်ဆောက်ရန် နှိပ်ပါ
+                    </p>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (onOpenExportModal) onOpenExportModal('pdf', 'dual');
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition-all active:scale-95"
+                      onClick={handleAutoFormatAndAdjust}
+                      disabled={isAutoFormatting}
+                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold hover:shadow-md transition-all active:scale-95 flex items-center gap-1.5"
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Save as Dual (PDF/Word)</span>
+                      {isAutoFormatting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                      <span>Generate 1:1 Reconstructed Layout</span>
                     </button>
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <div className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                        <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Original Scanned Document (100% Raw):</span>
-                      </div>
-                      <div className="bg-slate-900 rounded-xl overflow-hidden p-2 flex items-center justify-center min-h-[350px] border border-slate-800">
-                        <img
-                          src={scannedImage}
-                          alt="Original Document"
-                          className="max-h-[480px] w-auto object-contain rounded-lg"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <div className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>{localReconstruction?.htmlContent ? '1:1 Reconstructed Layout' : 'AI Framed OCR Result'}:</span>
-                      </div>
-                      <div className="max-h-[500px] overflow-y-auto pr-1">
-                        {localReconstruction?.htmlContent ? (
-                          <div className="p-4 bg-white dark:bg-white text-slate-900 rounded-xl border border-emerald-200 shadow-xs">
-                            <div
-                              className="prose max-w-none text-slate-900 leading-relaxed text-xs"
-                              dangerouslySetInnerHTML={{ __html: localReconstruction.htmlContent }}
-                            />
-                          </div>
-                        ) : formattedDoc ? (
-                          <AutoFramedDocumentView
-                            title={formattedDoc.title}
-                            subtitle={formattedDoc.subtitle}
-                            sections={formattedDoc.sections}
-                            tableData={tableRows}
-                          />
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                )
               )}
 
-              {/* Framed Cards View */}
-              {viewMode === 'framed' && formattedDoc && (
-                <AutoFramedDocumentView
-                  title={formattedDoc.title}
-                  subtitle={formattedDoc.subtitle}
-                  sections={formattedDoc.sections}
-                  tableData={tableRows}
-                />
-              )}
-
-              {/* Raw Text Editable View */}
-              {viewMode === 'text' && (
-                <div className="space-y-2">
-                  <textarea
-                    value={extractedText}
-                    onChange={e => onTextChange(e.target.value)}
-                    rows={12}
-                    className="w-full font-mono text-xs sm:text-sm p-3 rounded-lg border border-emerald-200 dark:border-dark-border bg-emerald-50/20 dark:bg-dark-bg text-slate-900 dark:text-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-y leading-relaxed"
-                    placeholder="OCR recognized text will appear here..."
+              {/* Mode 2: Frame Cards View */}
+              {viewMode === 'framed' && (
+                formattedDoc ? (
+                  <AutoFramedDocumentView
+                    title={formattedDoc.title}
+                    subtitle={formattedDoc.subtitle}
+                    sections={formattedDoc.sections}
+                    tableData={tableRows}
                   />
-                  <div className="flex items-center justify-between text-[11px] text-emerald-800/80 dark:text-emerald-400/80 px-1">
-                    <span>{extractedText.split('\n').filter(l => l.trim()).length} lines detected</span>
-                    <span>1:1 Editable Myanmar Unicode & English buffer</span>
+                ) : (
+                  <div className="p-6 bg-white dark:bg-dark-surface rounded-xl border border-slate-200 dark:border-dark-border text-center text-xs text-slate-500">
+                    No structured sections found for Frame Cards.
                   </div>
-                </div>
+                )
               )}
 
-              {/* 2D Table Matrix View */}
-              {viewMode === 'table' && tableRows && tableRows.length > 0 && (
-                <div className="rounded-xl border border-emerald-200 dark:border-dark-border bg-white dark:bg-dark-card overflow-hidden shadow-xs">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <tbody>
-                        {tableRows.map((row, rIdx) => (
-                          <tr
-                            key={rIdx}
-                            className={
-                              rIdx === 0
-                                ? 'bg-emerald-600 text-white font-semibold'
-                                : rIdx % 2 === 1
-                                ? 'bg-emerald-50/40 dark:bg-emerald-950/30 text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-dark-border'
-                                : 'bg-white dark:bg-dark-card text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-dark-border'
-                            }
-                          >
-                            {row.map((cell, cIdx) => (
-                              <td key={cIdx} className="px-3 py-2 border-r border-slate-200/50 dark:border-dark-border last:border-r-0">
-                                {cell}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              {/* Mode 3: Gemini AI Smart Cell & Grid Calculation Engine View */}
+              {viewMode === 'ai_grid' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 dark:from-emerald-950/40 dark:via-teal-950/40 dark:to-emerald-950/40 border border-emerald-300 dark:border-emerald-800 rounded-xl flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 rounded-lg bg-emerald-600 text-white">
+                        <Sparkles className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <span>Gemini AI Smart Cell & Grid Calculation Engine</span>
+                          <span className="text-[10px] bg-emerald-600 text-white font-semibold px-2 py-0.5 rounded-full">
+                            Live Preview
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-600 dark:text-slate-300">
+                          Cell Borders၊ Background Colors၊ Columns နှင့် Alignment များကို Gemini AI ဖြင့် တိကျစွာ တွက်ချက်ထားသော Preview
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => loadAiGridData(true)}
+                        disabled={isLoadingAiGrid}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-dark-card border border-slate-300 dark:border-dark-border text-slate-700 dark:text-slate-300 text-xs font-semibold hover:bg-slate-50 transition-all disabled:opacity-50"
+                        title="Recalculate AI Grid"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAiGrid ? 'animate-spin' : ''}`} />
+                        <span>Recalculate</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onOpenExportModal) onOpenExportModal('pdf', 'ai_grid');
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition-all active:scale-95"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Save as PDF (AI Grid)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onOpenExportModal) onOpenExportModal('word', 'ai_grid');
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition-all active:scale-95"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Save as Word (AI Grid)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onOpenExportModal) onOpenExportModal('excel', 'ai_grid');
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all active:scale-95"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Save as Excel (AI Grid)</span>
+                      </button>
+                    </div>
                   </div>
+
+                  {isLoadingAiGrid ? (
+                    <div className="py-16 flex flex-col items-center justify-center bg-white dark:bg-dark-surface/40 rounded-xl border border-emerald-200 dark:border-dark-border text-center">
+                      <Loader2 className="w-8 h-8 text-emerald-600 animate-spin mb-3" />
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                        Gemini AI Smart Cell & Grid Calculation Engine ဖြင့် တွက်ချက်နေပါသည်...
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Analyzing cell boundaries, borders, colors, column spans and typography
+                      </p>
+                    </div>
+                  ) : aiGridHtml ? (
+                    <div className="p-4 sm:p-6 bg-white text-slate-900 rounded-xl border border-emerald-200 shadow-sm overflow-x-auto">
+                      <div dangerouslySetInnerHTML={{ __html: aiGridHtml }} />
+                    </div>
+                  ) : (
+                    <div className="py-12 flex flex-col items-center justify-center bg-white dark:bg-dark-surface/40 rounded-xl border border-dashed border-emerald-300 text-center px-4">
+                      <Sparkles className="w-8 h-8 text-emerald-600 mb-2" />
+                      <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200">
+                        Gemini AI Smart Cell & Grid Calculation Engine Preview
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1 mb-3">
+                        ပုံရိပ်မှ ဇယားမျဉ်း၊ အရောင်နှင့် Cell ဖွဲ့စည်းမှုများကို အထူးတိကျစွာ တွက်ချက်ကြည့်ရှုနိုင်ပါသည်
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => loadAiGridData(true)}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold hover:shadow-md transition-all active:scale-95 flex items-center gap-1.5"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        <span>Calculate AI Grid Preview</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -907,7 +915,13 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
             <div className="mt-4 pt-3 border-t border-emerald-100 dark:border-dark-border flex items-center justify-between flex-wrap gap-2">
               <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
                 <span>Layout: </span>
-                <span className="font-bold text-emerald-700 dark:text-emerald-400">Reconstructed / Matrix / Dual / Cards</span>
+                <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                  {viewMode === 'ai_grid'
+                    ? 'Gemini AI Smart Cell & Grid Calculation Engine'
+                    : viewMode === 'framed'
+                    ? 'Frame Cards'
+                    : 'Reconstructed'}
+                </span>
               </div>
 
               <div className="flex items-center gap-2 flex-wrap">
@@ -915,7 +929,7 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const currentLayout: ExportLayoutMode = localReconstruction?.htmlContent ? 'reconstructed' : viewMode === 'text' ? 'text' : 'framed';
+                    const currentLayout: ExportLayoutMode = viewMode === 'ai_grid' ? 'ai_grid' : viewMode === 'framed' ? 'framed' : 'reconstructed';
                     if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
                     else onSaveAsPdf();
                   }}
@@ -925,37 +939,25 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                   <span>Save as PDF</span>
                 </button>
 
-                {/* Save as Matrix */}
+                {/* Save as Word */}
                 <button
                   type="button"
                   onClick={() => {
-                    if (onOpenExportModal) onOpenExportModal('pdf', 'matrix');
+                    const currentLayout: ExportLayoutMode = viewMode === 'ai_grid' ? 'ai_grid' : viewMode === 'framed' ? 'framed' : 'reconstructed';
+                    if (onOpenExportModal) onOpenExportModal('word', currentLayout);
                   }}
-                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-700 hover:from-teal-700 hover:to-cyan-800 text-white font-semibold text-xs shadow-sm shadow-teal-500/20 transition-all active:scale-[0.98]"
-                  title="Save as Structured Table Matrix"
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-semibold text-xs shadow-sm shadow-blue-500/20 transition-all active:scale-[0.98]"
+                  title="Save as Microsoft Word (.docx)"
                 >
-                  <Grid className="w-3.5 h-3.5" />
-                  <span>Save as Matrix</span>
-                </button>
-
-                {/* Save as Dual */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onOpenExportModal) onOpenExportModal('pdf', 'dual');
-                  }}
-                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white font-semibold text-xs shadow-sm shadow-indigo-500/20 transition-all active:scale-[0.98]"
-                  title="Save as Dual Review (Scan & OCR Side-by-Side)"
-                >
-                  <Columns className="w-3.5 h-3.5" />
-                  <span>Save as Dual</span>
+                  <FileEdit className="w-3.5 h-3.5" />
+                  <span>Save as Word</span>
                 </button>
 
                 {/* Export Excel */}
                 <button
                   type="button"
                   onClick={() => {
-                    const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                    const currentLayout: ExportLayoutMode = viewMode === 'ai_grid' ? 'ai_grid' : viewMode === 'framed' ? 'framed' : 'reconstructed';
                     if (onOpenExportModal) onOpenExportModal('excel', currentLayout);
                     else if (onExportExcelDirectly) onExportExcelDirectly();
                     else onGoToExcel();
@@ -966,11 +968,24 @@ export const ScannerTab: React.FC<ScannerTabProps> = ({
                   <span>Save as Excel</span>
                 </button>
 
+                {/* Gemini AI Grid direct modal */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onOpenExportModal) onOpenExportModal('pdf', 'ai_grid');
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-800 hover:to-teal-800 text-white font-semibold text-xs shadow-sm shadow-teal-500/20 transition-all active:scale-[0.98]"
+                  title="Save using Gemini AI Smart Cell & Grid Calculation Engine"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Gemini AI Grid</span>
+                </button>
+
                 {/* Upload to Google Drive */}
                 <button
                   type="button"
                   onClick={() => {
-                    const currentLayout: ExportLayoutMode = viewMode === 'text' ? 'text' : viewMode === 'table' ? 'matrix' : 'framed';
+                    const currentLayout: ExportLayoutMode = viewMode === 'ai_grid' ? 'ai_grid' : viewMode === 'framed' ? 'framed' : 'reconstructed';
                     if (onOpenExportModal) onOpenExportModal('pdf', currentLayout);
                     else if (onQuickUploadToDrive) onQuickUploadToDrive();
                   }}

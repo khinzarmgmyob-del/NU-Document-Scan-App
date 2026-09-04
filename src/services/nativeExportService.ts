@@ -280,7 +280,7 @@ export class NativeExportService {
     const fullFileName = `${baseName}.docx`;
     const mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-    const { blob } = WordExportService.generateAndSaveWord({
+    const { blob } = await WordExportService.generateAndSaveWord({
       title,
       htmlContent,
       fullText,

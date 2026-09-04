@@ -130,10 +130,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             htmlContent,
           });
         }
-        const layoutLabel = layoutMode === 'reconstructed' ? '1:1 Reconstructed' : layoutMode === 'matrix' ? 'Structured Matrix' : layoutMode === 'dual' ? 'Dual Review' : layoutMode === 'text' ? 'Text Flow' : 'Frame Cards';
+        const layoutLabel = layoutMode === 'ai_grid'
+          ? 'Gemini AI Grid Engine'
+          : layoutMode === 'framed'
+          ? 'Frame Cards'
+          : 'Reconstructed';
         onToast(`PDF သိမ်းဆည်းပြီးပါပြီ (${layoutLabel}): ${savedName}`);
       } else if (format === 'word') {
-        const { blob, fileName: savedName, dataUrl } = WordExportService.generateAndSaveWord({
+        const { blob, fileName: savedName, dataUrl } = await WordExportService.generateAndSaveWord({
           title: cleanBaseName,
           htmlContent,
           fullText: extractedText,
@@ -155,7 +159,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             htmlContent,
           });
         }
-        const layoutLabel = layoutMode === 'reconstructed' ? '1:1 Reconstructed' : layoutMode === 'matrix' ? 'Structured Matrix' : layoutMode === 'dual' ? 'Dual Review' : layoutMode === 'text' ? 'Text Flow' : 'Frame Cards';
+        const layoutLabel = layoutMode === 'ai_grid'
+          ? 'Gemini AI Grid Engine'
+          : layoutMode === 'framed'
+          ? 'Frame Cards'
+          : 'Reconstructed';
         onToast(`Microsoft Word (.docx) သိမ်းဆည်းပြီးပါပြီ (${layoutLabel}): ${savedName}`);
       } else if (format === 'excel') {
         const { blob, fileName: savedName, isAiCalculated } = await SpreadsheetService.exportToExcelWithAiEngine({
@@ -184,15 +192,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             driveSynced: false,
           });
         }
-        const engineLabel = isAiCalculated
+        const engineLabel = layoutMode === 'ai_grid' || isAiCalculated
           ? 'Gemini AI Grid Engine'
-          : layoutMode === 'ai_grid'
-          ? 'AI Grid Engine'
-          : layoutMode === 'matrix'
-          ? 'Table Matrix'
           : layoutMode === 'framed'
           ? 'Frame Cards'
-          : 'Text Flow';
+          : 'Reconstructed';
         onToast(`Excel Workbook သိမ်းဆည်းပြီးပါပြီ (${engineLabel}): ${savedName}`);
       } else {
         const { blob, fileName: savedName } = SpreadsheetService.exportToCsv({
@@ -246,7 +250,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         targetName = res.fileName;
         targetMime = 'application/pdf';
       } else if (format === 'word') {
-        const res = WordExportService.generateAndSaveWord({
+        const res = await WordExportService.generateAndSaveWord({
           title: cleanBaseName,
           htmlContent,
           fullText: extractedText,
@@ -455,142 +459,76 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
                   {layoutMode === 'ai_grid'
                     ? '⚡ Gemini AI Grid Engine'
-                    : layoutMode === 'reconstructed'
-                    ? '✨ 1:1 Reconstructed'
-                    : layoutMode === 'matrix'
-                    ? '▦ Table Matrix'
-                    : layoutMode === 'dual'
-                    ? '📑 Dual Review'
                     : layoutMode === 'framed'
                     ? '🗂️ Frame Cards'
-                    : '📝 Text Flow'}
+                    : '✨ Reconstructed'}
                 </span>
               </div>
 
               <div className="space-y-2.5">
-                {/* Option AI Grid: Gemini AI Smart Cell & Grid Calculation Engine (Columns, Rows, Titles, Paragraphs, Spaces) */}
-                {format === 'excel' && (
-                  <button
-                    type="button"
-                    onClick={() => setLayoutMode('ai_grid')}
-                    className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
-                      layoutMode === 'ai_grid'
-                        ? 'border-emerald-500 bg-emerald-50/90 dark:bg-emerald-950/70 ring-2 ring-emerald-500/40 shadow-xs'
-                        : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-emerald-300'
-                    }`}
-                  >
-                    <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
-                      layoutMode === 'ai_grid' ? 'bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-xs' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
-                    }`}>
-                      <Sparkles className="w-4 h-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-                          <span>Gemini AI Smart Cell & Grid Calculation Engine</span>
-                          <span className="text-[10px] bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold px-1.5 py-0.5 rounded-sm">
-                            Gemini AI Engine
-                          </span>
-                        </span>
-                        {layoutMode === 'ai_grid' && <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
-                      </div>
-                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
-                        Document ပုံရိပ်ထဲမှ Table Border မျဉ်းများ၊ Header/Cell Background Color အရောင်များ၊ Column၊ Title/Tile၊ Paragraph၊ Text စာသားများနှင့် Spacing အကွာအဝေးများကို Gemini AI ဖြင့် Cell တစ်ကွက်ချင်းစီ သေချာစစ်ဆေးပြီး မူရင်းအတိုင်း ထပ်တူကျ Excel Cell, Row, Column နေရာများအလိုက် တိကျစွာ ပုံဖော်ထုတ်လုပ်ပေးသည့် Engine (Recommended)
-                      </p>
-                    </div>
-                  </button>
-                )}
-
-                {/* Option 1: Matrix Mode (Full Data Grid Matrix) */}
+                {/* Option 1: Gemini AI Smart Cell & Grid Calculation Engine */}
                 <button
                   type="button"
-                  onClick={() => setLayoutMode('matrix')}
+                  onClick={() => setLayoutMode('ai_grid')}
                   className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
-                    layoutMode === 'matrix'
-                      ? 'border-blue-500 bg-blue-50/80 dark:bg-blue-950/60 ring-1 ring-blue-500 shadow-xs'
-                      : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-blue-300'
+                    layoutMode === 'ai_grid'
+                      ? 'border-emerald-500 bg-emerald-50/90 dark:bg-emerald-950/70 ring-2 ring-emerald-500/40 shadow-xs'
+                      : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-emerald-300'
                   }`}
                 >
                   <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
-                    layoutMode === 'matrix' ? 'bg-teal-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
+                    layoutMode === 'ai_grid' ? 'bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-xs' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
                   }`}>
-                    <Grid className="w-4 h-4" />
+                    <Sparkles className="w-4 h-4" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-                        <span>Structured Table Matrix (ဇယားကွက်အပြည့်အစုံ)</span>
-                        <span className="text-[10px] bg-teal-600 text-white font-semibold px-1.5 py-0.5 rounded-sm">Data Grid</span>
+                        <span>Gemini AI Smart Cell & Grid Calculation Engine</span>
+                        <span className="text-[10px] bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold px-1.5 py-0.5 rounded-sm">
+                          {format === 'excel' ? 'Excel AI Engine' : format === 'word' ? 'Word AI Grid' : 'PDF High Precision'}
+                        </span>
                       </span>
-                      {layoutMode === 'matrix' && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
+                      {layoutMode === 'ai_grid' && <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
                     </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                      အချက်အလက်အားလုံးကို No, Section, Topic နှင့် Details/Action Columns များဖြင့် အပြည့်အစုံ ဇယား Matrix ဆွဲပေးထားသော Layout (PDF / Word / Excel အားလုံး သုံးနိုင်ပါသည်)
+                    <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                      {format === 'pdf'
+                        ? 'Document ပုံရိပ်ထဲမှ Table Border မျဉ်းများ၊ Header/Cell Background Color အရောင်များ၊ Column အလိုက် အကွက်များနှင့် Cell Spacing များကို Gemini AI ဖြင့် Cell တစ်ကွက်ချင်းစီ သေချာတွက်ချက်ပြီး မူရင်းအတိုင်း တိကျလှပသော High-DPI PDF အဖြစ် ထုတ်လုပ်ပေးပါသည် (Recommended)'
+                        : format === 'word'
+                        ? 'Document ပုံရိပ်ထဲမှ Table Border မျဉ်းများ၊ Header Background Color အရောင်များ၊ Cell Merges နှင့် Paragraph များကို Gemini AI ဖြင့် တိကျစွာ တွက်ချက်ပြီး Microsoft Word (.docx) ဇယားကွက်များဖြင့် ထုတ်လုပ်ပေးပါသည် (Recommended)'
+                        : 'Document ပုံရိပ်ထဲမှ Table Border မျဉ်းများ၊ Header/Cell Background Color အရောင်များ၊ Column၊ Title/Tile၊ Paragraph၊ Text စာသားများနှင့် Spacing အကွာအဝေးများကို Gemini AI ဖြင့် Cell တစ်ကွက်ချင်းစီ သေချာစစ်ဆေးပြီး မူရင်းအတိုင်း ထပ်တူကျ Excel Cell, Row, Column နေရာများအလိုက် တိကျစွာ ပုံဖော်ထုတ်လုပ်ပေးသည့် Engine (Recommended)'}
                     </p>
                   </div>
                 </button>
 
-                {/* Option 2: Dual Review Mode (Side-by-Side Scan & OCR Reconstructed) */}
-                {(format === 'pdf' || format === 'word') && (
-                  <button
-                    type="button"
-                    onClick={() => setLayoutMode('dual')}
-                    className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
-                      layoutMode === 'dual'
-                        ? 'border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/60 ring-1 ring-indigo-500 shadow-xs'
-                        : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-indigo-300'
-                    }`}
-                  >
-                    <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
-                      layoutMode === 'dual' ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
-                    }`}>
-                      <Columns className="w-4 h-4" />
+                {/* Option 2: Reconstructed Layout */}
+                <button
+                  type="button"
+                  onClick={() => setLayoutMode('reconstructed')}
+                  className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
+                    layoutMode === 'reconstructed'
+                      ? 'border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/50 ring-1 ring-emerald-500 shadow-xs'
+                      : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-emerald-300'
+                  }`}
+                >
+                  <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+                    layoutMode === 'reconstructed' ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
+                  }`}>
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <span>Reconstructed Layout (1:1 ပြန်လည်တည်ဆောက်မှု)</span>
+                        <span className="text-[10px] bg-emerald-600 text-white font-semibold px-1.5 py-0.5 rounded-sm">1:1 Layout</span>
+                      </span>
+                      {layoutMode === 'reconstructed' && <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-                          <span>Dual Review (မူရင်းမှတ်တမ်းနှင့် OCR ပြန်လည်တည်ဆောက်မှု နှိုင်းယှဉ်ချက်)</span>
-                          <span className="text-[10px] bg-indigo-600 text-white font-semibold px-1.5 py-0.5 rounded-sm">Dual View</span>
-                        </span>
-                        {layoutMode === 'dual' && <Check className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />}
-                      </div>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                        မူရင်း Scanned Document ဓာတ်ပုံနှင့် AI Reconstructed Layout တို့ကို စာမျက်နှာအလိုက် ယှဉ်တွဲဖော်ပြပေးသော Dual Verification Layout (PDF / Word)
-                      </p>
-                    </div>
-                  </button>
-                )}
-
-                {/* Option 0: Reconstructed HTML Layout (When available) */}
-                {htmlContent && (format === 'pdf' || format === 'word') && (
-                  <button
-                    type="button"
-                    onClick={() => setLayoutMode('reconstructed')}
-                    className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
-                      layoutMode === 'reconstructed'
-                        ? 'border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/50 ring-1 ring-emerald-500 shadow-xs'
-                        : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-emerald-300'
-                    }`}
-                  >
-                    <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
-                      layoutMode === 'reconstructed' ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
-                    }`}>
-                      <Sparkles className="w-4 h-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-                          <span>1:1 Pixel-Perfect Reconstructed Layout</span>
-                          <span className="text-[10px] bg-emerald-600 text-white font-semibold px-1.5 py-0.5 rounded-sm">AI Engine</span>
-                        </span>
-                        {layoutMode === 'reconstructed' && <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
-                      </div>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                        မူရင်းစာရွက်အတိုင်း တိကျသော Table Grid၊ Merged Cells၊ Header၊ Border၊ Font Style နှင့် အရောင်များ 1:1 ကိုက်ညီမှု
-                      </p>
-                    </div>
-                  </button>
-                )}
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                      မူရင်းစာရွက်အတိုင်း တိကျသော Table Grid၊ Merged Cells၊ Header၊ Border၊ Font Style နှင့် အရောင်များ 1:1 ကိုက်ညီမှုရှိသော Document Layout
+                    </p>
+                  </div>
+                </button>
 
                 {/* Option 3: Frame Cards */}
                 <button
@@ -610,40 +548,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
-                        Frame Cards (၁၀၀% မူရင်းပုံစံ Card Layout)
+                        Frame Cards (အကွက်လိုက် ဖွဲ့စည်းမှု)
                       </span>
                       {layoutMode === 'framed' && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                      မူရင်း Deep Navy Header Banner၊ White Cards၊ Green Checkmarks (✔)၊ Accent Bars နှင့် သတိပေးချက် Note Box ပါဝင်သော 1:1 Layout
-                    </p>
-                  </div>
-                </button>
-
-                {/* Option 4: Text Flow */}
-                <button
-                  type="button"
-                  onClick={() => setLayoutMode('text')}
-                  className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
-                    layoutMode === 'text'
-                      ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/50 ring-1 ring-blue-500 shadow-xs'
-                      : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-blue-300'
-                  }`}
-                >
-                  <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
-                    layoutMode === 'text' ? 'bg-emerald-600 text-white' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
-                  }`}>
-                    <AlignLeft className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
-                        Text Flow (Clean Document & Paragraphs)
-                      </span>
-                      {layoutMode === 'text' && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                      သပ်ရပ်သော Document Typography၊ ခေါင်းစဉ်ကြီး/ငယ်၊ စာပိုဒ်များနှင့် အစီအစဉ်တကျ ကျစ်လျစ်သော Bullet Point များဖြင့် ဖွဲ့စည်းမှု
+                      မူရင်း Deep Navy Header Banner၊ White Cards၊ Green Checkmarks (✔)၊ Accent Bars နှင့် သတိပေးချက် Note Box ပါဝင်သော 1:1 Card Layout
                     </p>
                   </div>
                 </button>

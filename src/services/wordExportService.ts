@@ -1,5 +1,6 @@
 import { ExportLayoutMode } from '../types';
 import { OcrService } from './ocrService';
+import { DocumentGridService } from './documentGridService';
 
 /**
  * Microsoft Word (.docx / Office HTML) Document Generation Service
@@ -35,8 +36,12 @@ export class WordExportService {
 
     let contentHtml = '';
 
+    // 0. AI Grid Layout in Word (Gemini AI Smart Cell & Grid Calculation Engine)
+    if (layoutMode === 'ai_grid' && htmlContent) {
+      contentHtml = htmlContent;
+    }
     // 1. Matrix Layout in Word (Structured Table Matrix Grid)
-    if (layoutMode === 'matrix') {
+    else if (layoutMode === 'matrix') {
       let matrixRows = tableData || [];
       if (matrixRows.length === 0 && fullText) {
         matrixRows = OcrService.parseTextToSpreadsheetMatrix(fullText);
@@ -210,9 +215,9 @@ export class WordExportService {
   }
 
   /**
-   * Generates and downloads a .docx Word document
+   * Generates and downloads a .docx Word document with full AI Grid and style support
    */
-  static generateAndSaveWord({
+  static async generateAndSaveWord({
     title,
     htmlContent,
     fullText,
@@ -232,13 +237,36 @@ export class WordExportService {
     layoutMode?: ExportLayoutMode;
     customFileName?: string;
     autoDownload?: boolean;
-  }): { blob: Blob; fileName: string; dataUrl: string } {
+  }): Promise<{ blob: Blob; fileName: string; dataUrl: string; isAiCalculated?: boolean }> {
     const cleanName = (customFileName || title || 'Scanned_Document').replace(/[/\\?%*:|"<>]/g, '_');
     const fileName = cleanName.endsWith('.docx') ? cleanName : `${cleanName}.docx`;
 
+    let finalHtml = htmlContent;
+    let isAiCalculated = false;
+
+    // AI Grid Calculation Engine for Word
+    if (layoutMode === 'ai_grid') {
+      try {
+        const gridData = await DocumentGridService.fetchAiGridData({
+          imageBase64: imageSrc || undefined,
+          ocrText: fullText,
+          tableData,
+          title: cleanName,
+        });
+
+        finalHtml = DocumentGridService.buildHtmlFromAiGrid(gridData, {
+          isWord: true,
+          containerPadding: '14pt 18pt',
+        });
+        isAiCalculated = gridData.isAiCalculated;
+      } catch (gridErr) {
+        console.warn('Word AI Grid generation failed, falling back:', gridErr);
+      }
+    }
+
     const blob = this.generateWordBlob({
       title: cleanName,
-      htmlContent,
+      htmlContent: finalHtml,
       fullText,
       subtitle,
       imageSrc,
@@ -260,6 +288,6 @@ export class WordExportService {
       }, 500);
     }
 
-    return { blob, fileName, dataUrl };
+    return { blob, fileName, dataUrl, isAiCalculated };
   }
 }
