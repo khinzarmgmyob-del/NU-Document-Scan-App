@@ -65,7 +65,7 @@ export interface DriveAccount {
 
 export type ActiveTab = 'scan' | 'excel' | 'voice' | 'storage' | 'bsetup';
 export type FilterCategory = 'all' | 'pdf' | 'excel' | 'audio' | 'word';
-export type ExportLayoutMode = 'reconstructed' | 'framed' | 'text' | 'matrix' | 'dual';
+export type ExportLayoutMode = 'reconstructed' | 'framed' | 'text' | 'matrix' | 'dual' | 'ai_grid';
 
 export interface BoundingBox {
   ymin: number; // 0 - 1000 normalized coordinate

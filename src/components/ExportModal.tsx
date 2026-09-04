@@ -84,6 +84,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       setFormat(activeFormat);
       if (initialLayoutMode) {
         setLayoutMode(initialLayoutMode);
+      } else if (activeFormat === 'excel') {
+        setLayoutMode('ai_grid');
       } else if (htmlContent) {
         setLayoutMode('reconstructed');
       } else {
@@ -156,10 +158,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         const layoutLabel = layoutMode === 'reconstructed' ? '1:1 Reconstructed' : layoutMode === 'matrix' ? 'Structured Matrix' : layoutMode === 'dual' ? 'Dual Review' : layoutMode === 'text' ? 'Text Flow' : 'Frame Cards';
         onToast(`Microsoft Word (.docx) သိမ်းဆည်းပြီးပါပြီ (${layoutLabel}): ${savedName}`);
       } else if (format === 'excel') {
-        const { blob, fileName: savedName } = SpreadsheetService.exportToExcel({
+        const { blob, fileName: savedName, isAiCalculated } = await SpreadsheetService.exportToExcelWithAiEngine({
           fileName: cleanBaseName,
           tableData,
           ocrText: extractedText,
+          imageBase64: imageSrc || undefined,
+          title: cleanBaseName,
           layoutMode,
           autoDownload: true,
         });
@@ -180,7 +184,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             driveSynced: false,
           });
         }
-        onToast(`Excel Workbook သိမ်းဆည်းပြီးပါပြီ (${layoutMode === 'framed' ? 'Frame Cards' : layoutMode === 'text' ? 'Text Flow' : 'Table Matrix'}): ${savedName}`);
+        const engineLabel = isAiCalculated
+          ? 'Gemini AI Grid Engine'
+          : layoutMode === 'ai_grid'
+          ? 'AI Grid Engine'
+          : layoutMode === 'matrix'
+          ? 'Table Matrix'
+          : layoutMode === 'framed'
+          ? 'Frame Cards'
+          : 'Text Flow';
+        onToast(`Excel Workbook သိမ်းဆည်းပြီးပါပြီ (${engineLabel}): ${savedName}`);
       } else {
         const { blob, fileName: savedName } = SpreadsheetService.exportToCsv({
           fileName: cleanBaseName,
@@ -247,10 +260,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         targetName = res.fileName;
         targetMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
       } else if (format === 'excel') {
-        const res = SpreadsheetService.exportToExcel({
+        const res = await SpreadsheetService.exportToExcelWithAiEngine({
           fileName: cleanBaseName,
           tableData,
           ocrText: extractedText,
+          imageBase64: imageSrc || undefined,
+          title: cleanBaseName,
           layoutMode,
           autoDownload: false,
         });
@@ -398,7 +413,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               {/* Excel */}
               <button
                 type="button"
-                onClick={() => setFormat('excel')}
+                onClick={() => {
+                  setFormat('excel');
+                  setLayoutMode('ai_grid');
+                }}
                 className={`flex flex-col items-center justify-center p-2.5 rounded-xl border text-xs font-bold transition-all ${
                   format === 'excel'
                     ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 ring-2 ring-emerald-500/20 shadow-xs'
@@ -427,7 +445,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </div>
           </div>
 
-          {/* 2. Layout Mode Selection (Reconstructed / Matrix / Dual / Framed Cards / Text Flow) */}
+          {/* 2. Layout Mode Selection (Reconstructed / Matrix / Dual / Framed Cards / Text Flow / AI Grid) */}
           {(format === 'pdf' || format === 'word' || format === 'excel') && (
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -435,7 +453,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   ၂။ Layout ဖွဲ့စည်းမှု ရွေးချယ်ပါ (Choose Document Layout):
                 </label>
                 <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                  {layoutMode === 'reconstructed'
+                  {layoutMode === 'ai_grid'
+                    ? '⚡ Gemini AI Grid Engine'
+                    : layoutMode === 'reconstructed'
                     ? '✨ 1:1 Reconstructed'
                     : layoutMode === 'matrix'
                     ? '▦ Table Matrix'
@@ -448,6 +468,39 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </div>
 
               <div className="space-y-2.5">
+                {/* Option AI Grid: Gemini AI Smart Cell & Grid Calculation Engine (Columns, Rows, Titles, Paragraphs, Spaces) */}
+                {format === 'excel' && (
+                  <button
+                    type="button"
+                    onClick={() => setLayoutMode('ai_grid')}
+                    className={`w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
+                      layoutMode === 'ai_grid'
+                        ? 'border-emerald-500 bg-emerald-50/90 dark:bg-emerald-950/70 ring-2 ring-emerald-500/40 shadow-xs'
+                        : 'border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface/40 hover:border-emerald-300'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+                      layoutMode === 'ai_grid' ? 'bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-xs' : 'bg-slate-100 dark:bg-dark-elevated text-slate-600'
+                    }`}>
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <span>Gemini AI Smart Cell & Grid Calculation Engine</span>
+                          <span className="text-[10px] bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold px-1.5 py-0.5 rounded-sm">
+                            Gemini AI Engine
+                          </span>
+                        </span>
+                        {layoutMode === 'ai_grid' && <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                        Document ပုံရိပ်ထဲမှ Table Border မျဉ်းများ၊ Header/Cell Background Color အရောင်များ၊ Column၊ Title/Tile၊ Paragraph၊ Text စာသားများနှင့် Spacing အကွာအဝေးများကို Gemini AI ဖြင့် Cell တစ်ကွက်ချင်းစီ သေချာစစ်ဆေးပြီး မူရင်းအတိုင်း ထပ်တူကျ Excel Cell, Row, Column နေရာများအလိုက် တိကျစွာ ပုံဖော်ထုတ်လုပ်ပေးသည့် Engine (Recommended)
+                      </p>
+                    </div>
+                  </button>
+                )}
+
                 {/* Option 1: Matrix Mode (Full Data Grid Matrix) */}
                 <button
                   type="button"

@@ -395,10 +395,13 @@ export function App() {
     try {
       const timeStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
       const fileName = `${currentDocTitle || `DocuScan_Export_${timeStamp}`}`;
-      const { blob, fileName: fullFileName } = SpreadsheetService.exportToExcel({
+      const { blob, fileName: fullFileName, isAiCalculated } = await SpreadsheetService.exportToExcelWithAiEngine({
         fileName,
         tableData: tableRows,
         ocrText: extractedText,
+        imageBase64: scannedImage || undefined,
+        title: currentDocTitle,
+        layoutMode: 'ai_grid',
       });
 
       // Convert blob to DataURL for offline storage caching

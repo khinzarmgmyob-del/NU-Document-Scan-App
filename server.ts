@@ -472,6 +472,178 @@ async function startServer() {
     }
   });
 
+  // GEMINI AI EXCEL CELL & GRID CALCULATION ENGINE
+  app.post("/api/gemini/excel-grid-engine", async (req, res) => {
+    try {
+      const { imageBase64, mimeType = "image/jpeg", ocrText = "", tableData = [], title = "", apiKey } = req.body;
+
+      const ai = getGeminiClient(apiKey);
+
+      const promptInstructions =
+        "You are an expert Document Intelligence, Multilingual OCR, and High-Precision Spreadsheet Cell & Grid Calculation Engine.\n" +
+        "You have native, fluent understanding of Myanmar Unicode (မြန်မာ ယူနီကုဒ် / Unicode 5.2+), English, and complex document layout topology.\n\n" +
+        "YOUR MISSION:\n" +
+        "Analyze the document image and/or text with cell-by-cell geometric precision.\n" +
+        "Calculate an exact 2D spreadsheet layout (Rows, Columns, Cells, Merges, and Spacing) in Microsoft Excel format.\n" +
+        "Every element of the document must be placed into deliberate, mathematically calculated cells, columns, and rows:\n\n" +
+        "1. TITLE & SUBTITLE BANNER (Tile/Title):\n" +
+        "   - Calculate Row 0 for main document title. Merge columns (e.g. from Col 0 to Col 4 or 5) so it stands as a wide header.\n" +
+        "   - Calculate Row 1 for subtitle, metadata, or date.\n\n" +
+        "2. SPACING ROWS (Space):\n" +
+        "   - Leave deliberate empty rows (array of empty strings) between sections, titles, and data tables to preserve original visual spacing and layout rhythm.\n\n" +
+        "3. SECTION HEADERS & TOPIC CARDS:\n" +
+        "   - Place each section title (e.g. '▶ ၁။ MYOB စနစ်တကျ အသုံးပြုရန် Standard နည်းလမ်းများ', '▶ ၂။ ဖြစ်လေ့ရှိသော ပြဿနာများနှင့် ဖြေရှင်းနည်းများ') on its own row, merged across content columns.\n\n" +
+        "4. BULLET POINTS, CHECKMARKS, & TEXT (Text / Paragraph / Checkmarks):\n" +
+        "   - Separate into dedicated columns:\n" +
+        "     * Col A (0): Checkmark / bullet / number (e.g. '✔', '•', '၁။', '1.')\n" +
+        "     * Col B (1): Topic / Item Name (e.g. '၃ ရက်လျှင် ၁ ကြိမ် Backup ပြုလုပ်ပါ')\n" +
+        "     * Col C (2): Detailed description / subtext / explanation\n" +
+        "     * Col D (3): Classification / Action / Notes (e.g. 'Standard Procedure')\n\n" +
+        "5. DATA TABLES & FINANCIAL VOUCHERS (Columns / Rows):\n" +
+        "   - If the document contains a table, receipt, or invoice:\n" +
+        "     * Column headers row with exact titles (e.g. ['စဉ်', 'အကြောင်းအရာ', 'အရေအတွက်', 'နှုန်း', 'ကျသင့်ငွေ'])\n" +
+        "     * Subsequent rows matching cell by cell, with numbers, currencies, and descriptions properly aligned in separate cells.\n\n" +
+        "6. NOTES, WARNINGS & DISCLAIMERS:\n" +
+        "   - Place notes (မှတ်ချက်) and warnings in dedicated rows with full column merge.\n\n" +
+        "7. ACCURACY & FIDELITY:\n" +
+        "   - Transcribe Myanmar Unicode with 100% fidelity without broken ligatures or omitted words.\n" +
+        "   - Maintain all numbers, currency signs, English words (e.g. MYOB, ABSS, Backup, Verification, Error, Cloud) exactly as printed.\n\n" +
+        "8. TABLE BORDERS & COLOR FIDELITY (EXACT VISUAL REPLICATION):\n" +
+        "   - Inspect the document image carefully for visual colors, backgrounds, highlights, and borders:\n" +
+        "     * Header Banners: Detect the exact background hex color (headerBgColor: e.g. '0F766E' for deep teal, '1E3A8A' for navy blue, '0F172A' for dark slate, '166534' for green, 'DC2626' for red) and header text color (headerTextColor: e.g. 'FFFFFF' on dark headers).\n" +
+        "     * Table Grid Borders: Detect if the table has grid borders. Determine tableBorderStyle ('thin', 'medium', 'double', or 'none') and tableBorderColor (hex without '#', e.g. 'CBD5E1', '000000', '0F766E').\n" +
+        "     * Section & Topic Banners: Detect sectionBgColor (e.g. 'ECFDF5', 'EFF6FF', 'F8FAFC') and sectionTextColor.\n" +
+        "     * Warning/Notes Highlights: Detect noteBgColor (e.g. 'FEF3C7') and noteTextColor (e.g. '92400E').\n" +
+        "     * Alternating Zebra Rows: If the table has alternating shaded rows, specify zebraBgColor (e.g. 'F8FAFC').\n" +
+        "     * Range Styles: Provide exact rectangular ranges (startRow, startCol, endRow, endCol) with their bgColor, textColor, bold, align ('left'|'center'|'right'), borderStyle, and borderColor to faithfully clone the document's visual presentation.\n\n" +
+        (title ? `Document Title: ${title}\n` : "") +
+        (ocrText ? `Context OCR text:\n${ocrText.slice(0, 3000)}\n\n` : "") +
+        (tableData && tableData.length > 0 ? `Context Table Data:\n${JSON.stringify(tableData.slice(0, 20))}\n\n` : "");
+
+      let contents: any;
+      if (imageBase64) {
+        const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z0-9.+_-]+;base64,/, "");
+        contents = {
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: cleanBase64,
+              },
+            },
+            {
+              text: promptInstructions,
+            },
+          ],
+        };
+      } else {
+        contents = promptInstructions;
+      }
+
+      const { response, modelUsed } = await generateWithFallback(ai, {
+        contents,
+        config: {
+          temperature: 0.1,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              documentTitle: { type: Type.STRING },
+              sheetTitle: { type: Type.STRING },
+              grid: {
+                type: Type.ARRAY,
+                description: "2D array of rows, where each row is an array of cell values. Empty string for spacing.",
+                items: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+              },
+              merges: {
+                type: Type.ARRAY,
+                description: "List of cell merges with 0-indexed startRow, startCol, endRow, endCol",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    startRow: { type: Type.INTEGER },
+                    startCol: { type: Type.INTEGER },
+                    endRow: { type: Type.INTEGER },
+                    endCol: { type: Type.INTEGER },
+                  },
+                  required: ["startRow", "startCol", "endRow", "endCol"],
+                },
+              },
+              columnWidths: {
+                type: Type.ARRAY,
+                description: "Recommended character width for each column",
+                items: { type: Type.INTEGER },
+              },
+              palette: {
+                type: Type.OBJECT,
+                description: "Document visual color theme and border specifications extracted from the image",
+                properties: {
+                  headerBgColor: { type: Type.STRING, description: "6-digit hex without # for title and table headers" },
+                  headerTextColor: { type: Type.STRING, description: "6-digit hex without # for header text" },
+                  sectionBgColor: { type: Type.STRING, description: "6-digit hex without # for section header bars" },
+                  sectionTextColor: { type: Type.STRING, description: "6-digit hex without # for section text" },
+                  noteBgColor: { type: Type.STRING, description: "6-digit hex without # for notes/warnings" },
+                  noteTextColor: { type: Type.STRING, description: "6-digit hex without # for note text" },
+                  tableBorderColor: { type: Type.STRING, description: "6-digit hex without # for table borders" },
+                  tableBorderStyle: { type: Type.STRING, description: "thin | medium | double | none" },
+                  zebraBgColor: { type: Type.STRING, description: "6-digit hex without # for alternate table rows" },
+                  hasTableBorders: { type: Type.BOOLEAN, description: "Whether the document has visible table borders" },
+                },
+              },
+              rangeStyles: {
+                type: Type.ARRAY,
+                description: "Specific rectangular ranges with custom styling to replicate original borders and colors",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    startRow: { type: Type.INTEGER },
+                    startCol: { type: Type.INTEGER },
+                    endRow: { type: Type.INTEGER },
+                    endCol: { type: Type.INTEGER },
+                    bgColor: { type: Type.STRING, description: "6-digit hex without #" },
+                    textColor: { type: Type.STRING, description: "6-digit hex without #" },
+                    bold: { type: Type.BOOLEAN },
+                    align: { type: Type.STRING, description: "left | center | right" },
+                    borderStyle: { type: Type.STRING, description: "thin | medium | double | none" },
+                    borderColor: { type: Type.STRING, description: "6-digit hex without #" },
+                  },
+                  required: ["startRow", "startCol", "endRow", "endCol"],
+                },
+              },
+              rawDataTable: {
+                type: Type.ARRAY,
+                description: "Clean pure data table if document has tabular data",
+                items: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+              },
+            },
+            required: ["documentTitle", "sheetTitle", "grid"],
+          },
+        },
+      });
+
+      const responseText = response.text || "{}";
+      const parsed = JSON.parse(responseText);
+
+      return res.json({
+        success: true,
+        modelUsed,
+        ...parsed,
+      });
+    } catch (err: any) {
+      console.error("Excel Grid Engine Error:", err);
+      return res.json({
+        success: false,
+        error: err.message || "Failed to calculate Excel grid layout with Gemini AI",
+      });
+    }
+  });
+
   // Export to Microsoft Word (.docx / Office HTML Document) Endpoint
   app.post("/api/document/export-word", (req, res) => {
     try {
